@@ -90,7 +90,7 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - printf 'QUIT\r\n' | nc -w 2 127.0.0.1 25 | grep -q 220
+        - nc -z 127.0.0.1 25
       interval: 30s
       timeout: 5s
       retries: 3
@@ -161,7 +161,7 @@ docker inspect --format='{{json .State.Health.Log}}' smtp-relay | python3 -m jso
 
 | Type | Command | Meaning |
 |------|---------|---------|
-| SMTP banner | `printf 'QUIT\r\n' \| nc -w 2 127.0.0.1 25 \| grep -q 220` | Postfix is accepting SMTP connections |
+| TCP port check | `nc -z 127.0.0.1 25` | Postfix is accepting connections on port 25 |
 
 
 ## Dependencies
