@@ -120,7 +120,7 @@ For additional configuration options not covered by this image's environment var
 | `SMTP_TLS_SECURITY_LEVEL` | Outbound TLS level — encrypt (require TLS, default), may (opportunistic), or none (plaintext) | `encrypt` | No |
 | `MESSAGE_SIZE_LIMIT` | Maximum message size in bytes (default 10240000 = 10 MB, AWS SES supports up to 40 MB with limit increase) | `10240000` | No |
 | `ACCEPTED_NETWORKS` | Space-separated CIDRs allowed to send mail through this relay (default: 192.168.0.0/16 172.16.0.0/12 10.0.0.0/8) | `192.168.0.0/16` | No |
-| `RECIPIENT_RESTRICTIONS` | - | `` | No |
+| `RECIPIENT_RESTRICTIONS` | Optional recipient filter — space-separated list of allowed email addresses, domains, or regex patterns. If set, only matching recipients are accepted; all others are rejected. Leave empty to allow all recipients. | `` | No |
 
 ## Volumes
 
@@ -136,9 +136,8 @@ For additional configuration options not covered by this image's environment var
 
 ## Docker Healthcheck
 
-The healthcheck connects to port 25 and verifies Postfix responds with
-an SMTP 220 banner. This confirms the relay is actually accepting mail,
-not just that the process is running.
+The healthcheck verifies Postfix is accepting TCP connections on port 25.
+This confirms the relay process is running and the port is bound.
 
 **When it becomes unhealthy:**
 - Postfix hasn't finished starting yet (during `start_period`)
@@ -147,8 +146,8 @@ not just that the process is running.
 - Postfix crashed — the container exits entirely and Docker restarts it
 
 **When it recovers:**
-- Postfix starts accepting connections on port 25 and responds with a
-  220 banner. Recovery is automatic after a restart.
+- Postfix starts accepting connections on port 25. Recovery is
+  automatic after a restart.
 
 **Process model:** Postfix runs as PID 1 via `start-fg`. If Postfix
 dies, the container exits immediately — Docker's `restart: unless-stopped`
