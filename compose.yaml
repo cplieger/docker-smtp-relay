@@ -1,0 +1,33 @@
+services:
+  smtp-relay:
+    image: ghcr.io/cplieger/smtp-relay:latest
+    container_name: smtp-relay
+    restart: unless-stopped
+    user: "0:0"  # required for config file permissions
+    mem_limit: 128m
+
+    environment:
+      TZ: "Europe/Paris"
+      RELAY_HOST: "email-smtp.us-east-1.amazonaws.com"  # any SMTP provider hostname
+      RELAY_LOGIN: "your-relay-login"
+      RELAY_PASSWORD: "your-relay-password"
+      RELAY_PORT: "587"  # 587 = STARTTLS, 465 = implicit TLS
+      SMTP_TLS_SECURITY_LEVEL: "encrypt"  # encrypt, may, or none
+      MESSAGE_SIZE_LIMIT: "10240000"  # in bytes, default 10 MB
+      ACCEPTED_NETWORKS: "192.168.0.0/16"  # CIDRs that can relay mail
+      RECIPIENT_RESTRICTIONS: ""
+
+    ports:
+      - "25:25"
+
+    volumes:
+      - "/opt/appdata/smtp-relay:/var/spool/postfix"  # persistent mail queue
+
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - printf 'QUIT\r\n' | nc -w 2 127.0.0.1 25 | grep -q 220
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
