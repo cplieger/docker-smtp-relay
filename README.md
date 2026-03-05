@@ -6,7 +6,7 @@
 ![Platforms](https://img.shields.io/badge/platforms-amd64%20%7C%20arm64-blue)
 ![base: Alpine 3.23.3](https://img.shields.io/badge/base-Alpine_3.23.3-0D597F?logo=alpinelinux)
 
-Postfix SMTP relay with supervisor watchdog and recipient filtering
+Postfix SMTP relay
 
 ## Overview
 
