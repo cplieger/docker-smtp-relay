@@ -19,16 +19,10 @@ filtering, all configured via environment variables at startup.
 
 **Example use cases:**
 
-- **AWS SES**: Set `RELAY_HOST=email-smtp.us-east-1.amazonaws.com` with
-  your IAM SMTP credentials. Services on your LAN send to port 25 — the
-  relay handles SES authentication and TLS.
-- **Gmail**: Set `RELAY_HOST=smtp.gmail.com` with an App Password.
-  Useful for sending alerts from devices that don't support OAuth2.
-- **Mailgun / Sendgrid / Generic SMTP**: Any provider that accepts
-  SMTP with STARTTLS on port 587 works out of the box.
-- **Multi-service homelab**: NAS notifications, Grafana alerts,
-  Paperless-ngx, Uptime Kuma, IoT devices — point them all at
-  `<host-ip>:25` with no per-service SMTP configuration.
+- **AWS SES**: Set `RELAY_HOST=email-smtp.us-east-1.amazonaws.com` with your IAM SMTP credentials. Services on your LAN send to port 25 — the relay handles SES authentication and TLS.
+- **Gmail**: Set `RELAY_HOST=smtp.gmail.com` with an App Password. Useful for sending alerts from devices that don't support OAuth2.
+- **Mailgun / Sendgrid / Generic SMTP**: Any provider that accepts SMTP with STARTTLS on port 587 works out of the box.
+- **Multi-service homelab**: NAS notifications, Grafana alerts, Paperless-ngx, Uptime Kuma, IoT devices — point them all at `<host-ip>:25` with no per-service SMTP configuration.
 
 This is an Alpine-based container that runs as root — Postfix requires
 root for port 25 binding and config file permissions.
@@ -142,13 +136,11 @@ This confirms the relay process is running and the port is bound.
 
 **When it becomes unhealthy:**
 - Postfix hasn't finished starting yet (during `start_period`)
-- Postfix is running but not accepting connections (config error,
-  port binding failure)
+- Postfix is running but not accepting connections (config error, port binding failure)
 - Postfix crashed — the container exits entirely and Docker restarts it
 
 **When it recovers:**
-- Postfix starts accepting connections on port 25. Recovery is
-  automatic after a restart.
+- Postfix starts accepting connections on port 25. Recovery is automatic after a restart.
 
 **Process model:** Postfix runs as PID 1 via `start-fg`. If Postfix
 dies, the container exits immediately — Docker's `restart: unless-stopped`
@@ -174,14 +166,8 @@ All dependencies are updated automatically via [Renovate](https://github.com/ren
 
 ## Design Principles
 
-- **Always up to date**: Base images, packages, and libraries are
-  updated automatically via Renovate. Unlike many community Docker
-  images that ship outdated or abandoned dependencies, these images
-  receive continuous updates.
-- **Minimal attack surface**: When possible, pure Go apps use
-  `gcr.io/distroless/static:nonroot` (no shell, no package manager,
-  runs as non-root). Apps requiring system packages use Alpine with
-  the minimum necessary privileges.
+- **Always up to date**: Base images, packages, and libraries are updated automatically via Renovate. Unlike many community Docker images that ship outdated or abandoned dependencies, these images receive continuous updates.
+- **Minimal attack surface**: When possible, pure Go apps use `gcr.io/distroless/static:nonroot` (no shell, no package manager, runs as non-root). Apps requiring system packages use Alpine with the minimum necessary privileges.
 - **Digest-pinned**: Every `FROM` instruction pins a SHA256 digest. All GitHub Actions are digest-pinned.
 - **Multi-platform**: Built for `linux/amd64` and `linux/arm64`.
 - **Healthchecks**: Every container includes a Docker healthcheck.
@@ -193,22 +179,13 @@ Issues, suggestions, and pull requests are welcome.
 
 ## Credits
 
-This project packages [Postfix](https://github.com/vdukhovni/postfix)
-into a container image. All credit for the core functionality
-goes to the upstream maintainers.
+This project packages [Postfix](https://github.com/vdukhovni/postfix) into a container image. All credit for the core functionality goes to the upstream maintainers.
 
 ## Disclaimer
 
-These images are built with care and follow security best
-practices, but they are intended for **homelab use**. No
-guarantees of fitness for production environments. Use at
-your own risk.
+These images are built with care and follow security best practices, but they are intended for **homelab use**. No guarantees of fitness for production environments. Use at your own risk.
 
-This project was built with AI-assisted tooling using
-[Claude Opus](https://www.anthropic.com/claude) and
-[Kiro](https://kiro.dev). The human maintainer defines
-architecture, supervises implementation, and makes all
-final decisions.
+This project was built with AI-assisted tooling using [Claude Opus](https://www.anthropic.com/claude) and [Kiro](https://kiro.dev). The human maintainer defines architecture, supervises implementation, and makes all final decisions.
 
 ## License
 
