@@ -27,6 +27,7 @@ filtering, all configured via environment variables at startup.
 This is an Alpine-based container that runs as root — Postfix requires
 root for port 25 binding and config file permissions.
 
+
 ### How It Differs From Postfix
 
 The upstream [Postfix](https://www.postfix.org/) is a full MTA that
@@ -128,6 +129,7 @@ For additional configuration options not covered by this image's environment var
 | Port | Description |
 |------|-------------|
 | `25` | SMTP relay (accepts mail from local network) |
+
 
 ## Docker Healthcheck
 
