@@ -19,6 +19,16 @@ if [ -z "$RELAY_LOGIN" ] || [ -z "$RELAY_PASSWORD" ]; then
     echo "Warning: RELAY_LOGIN/RELAY_PASSWORD not set — SASL auth disabled" >&2
 fi
 
+# Validate ACCEPTED_NETWORKS — reject obviously dangerous open-relay configs
+for net in $ACCEPTED_NETWORKS; do
+    case "$net" in
+        0.0.0.0/0|::/0)
+            echo "Error: ACCEPTED_NETWORKS contains $net — this would create an open relay" >&2
+            exit 1
+            ;;
+    esac
+done
+
 # Bracket relayhost to skip MX lookups and handle IPv6 safely
 case "$RELAY_HOST" in
     \[*) RELAYHOST_BRACKETED="$RELAY_HOST" ;;

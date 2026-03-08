@@ -1,7 +1,7 @@
 # Changelog
 
-## 2026.03.07 (2026-03-07)
+## 2026.03.08 (2026-03-08)
 
-### Changed
+### Added
 
-- Rebuilt with updated publishing pipeline
+- Add validation to prevent open relay configuration
