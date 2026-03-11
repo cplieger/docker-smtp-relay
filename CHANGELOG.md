@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026.03.11 (2026-03-11)
+
+### Security
+
+- Improve error handling, validation, and security
+
+### Changed
+
+- Migrate to structured logging and enhance validation
+
 ## 2026.03.10 (2026-03-10)
 
 ### Changed
