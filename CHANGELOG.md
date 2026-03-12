@@ -1,6 +1,6 @@
 # Changelog
 
-## 2026.03.11 (2026-03-11)
+## 2026.03.11-8e3804d (2026-03-11)
 
 ### Security
 
@@ -9,12 +9,6 @@
 ### Changed
 
 - Migrate to structured logging and enhance validation
-
-## 2026.03.10 (2026-03-10)
-
-### Changed
-
-- Minor code improvements and optimizations
 
 ## 2026.03.07-8899e09 (2026-03-08)
 
