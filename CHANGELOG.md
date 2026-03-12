@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026.03.12-b843b96 (2026-03-12)
+
+### Fixed
+
+- Improve credential handling and regex escaping
+
+### Changed
+
+- Quote port mapping in compose file
+
 ## 2026.03.11-8e3804d (2026-03-11)
 
 ### Security

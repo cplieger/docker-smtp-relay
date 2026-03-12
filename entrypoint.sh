@@ -109,6 +109,8 @@ if [ -n "$RELAY_LOGIN" ] && [ -n "$RELAY_PASSWORD" ]; then
     # postmap inherits the process umask, not the source file mode — run it
     # inside a restrictive umask so the .db file is also 0600.
     (umask 077 && postmap /etc/postfix/sasl_passwd)
+    # Remove plaintext credentials — Postfix only reads the .db file.
+    rm -f /etc/postfix/sasl_passwd
     RELAY_AUTH_PASSWORD_MAPS="hash:/etc/postfix/sasl_passwd"
     printf 'level=info msg="SASL authentication configured"\n' >&2
 fi
@@ -126,12 +128,14 @@ if [ -n "$RECIPIENT_RESTRICTIONS" ]; then
             /*/)
                 printf '%s OK\n' "$token" >> "$RCPT_FILE" ;;
             *@*)
-                # Escape regex metacharacters AND the / delimiter used by Postfix regexp tables
-                esc=$(printf '%s' "$token" | sed 's/[.[\^$*+?(){|/\\]/\\&/g')
+                # Escape regex metacharacters and the / delimiter used by
+                # Postfix regexp tables. ] must be first in the character class
+                # per POSIX; # delimiter avoids conflict with literal /.
+                esc=$(printf '%s' "$token" | sed 's#[].[\\^$*+?(){|/]#\\&#g')
                 printf '/^%s$/ OK\n' "$esc" >> "$RCPT_FILE" ;;
             *)
                 # Domain match — same escaping as above
-                esc=$(printf '%s' "$token" | sed 's/[.[\^$*+?(){|/\\]/\\&/g')
+                esc=$(printf '%s' "$token" | sed 's#[].[\\^$*+?(){|/]#\\&#g')
                 printf '/@%s$/ OK\n' "$esc" >> "$RCPT_FILE" ;;
         esac
     done
