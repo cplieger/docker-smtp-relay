@@ -158,6 +158,26 @@ docker inspect --format='{{json .State.Health.Log}}' smtp-relay | python3 -m jso
 | TCP port check | `nc -z 127.0.0.1 25` | Postfix is accepting connections on port 25 |
 
 
+## Code Quality
+
+| Metric | Value |
+|--------|-------|
+| Language | POSIX shell (Alpine) |
+| Entrypoint | 193 lines |
+| Static Analysis | [ShellCheck](https://www.shellcheck.net/) (enforced in CI) |
+| Validation Tests | 177 |
+| Input Validation | Newline injection, numeric, open-relay CIDR, TLS level |
+
+The entrypoint generates Postfix config from environment variables
+with security-focused input validation: newline injection prevention,
+numeric parameter validation, open-relay CIDR rejection
+(`0.0.0.0/0`, `::/0`), TLS security level validation, and SASL
+credential pairing. The validation logic is tested via a shared
+reference library with 177 tests. ShellCheck enforced in CI.
+
+Not tested via unit tests: the Postfix config generation and daemon
+startup — validated on first deploy via the TCP port healthcheck.
+
 ## Dependencies
 
 All dependencies are updated automatically via [Renovate](https://github.com/renovatebot/renovate) and pinned by digest or version for reproducibility.
