@@ -67,20 +67,20 @@ services:
 
     environment:
       TZ: "Europe/Paris"
-      RELAY_HOST: "email-smtp.us-east-1.amazonaws.com"  # any SMTP provider hostname
+      RELAY_HOST: "\\email-smtp.us-east-1.amazonaws.com"  # any SMTP provider hostname
       RELAY_LOGIN: "your-relay-login"
       RELAY_PASSWORD: "your-relay-password"
       RELAY_PORT: "587"  # 587 = STARTTLS, 465 = implicit TLS
       SMTP_TLS_SECURITY_LEVEL: "encrypt"  # encrypt, may, or none
       MESSAGE_SIZE_LIMIT: "10240000"  # in bytes, default 10 MB
-      ACCEPTED_NETWORKS: "192.168.0.0/16"  # CIDRs that can relay mail
+      ACCEPTED_NETWORKS: "\\192.168.0.0/16"  # CIDRs that can relay mail
       RECIPIENT_RESTRICTIONS: ""
 
     ports:
       - "25:25"
 
     volumes:
-      - "/opt/appdata/smtp-relay:/var/spool/postfix"  # persistent mail queue
+      - "\\/opt/appdata/smtp-relay:/var/spool/postfix"  # persistent mail queue
 
     healthcheck:
       test:
@@ -108,13 +108,13 @@ For additional configuration options not covered by this image's environment var
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|
 | `TZ` | Container timezone | `Europe/Paris` | No |
-| `RELAY_HOST` | Upstream SMTP relay hostname — works with any provider (e.g. email-smtp.us-east-1.amazonaws.com for AWS SES, smtp.gmail.com for Gmail, smtp.mailgun.org for Mailgun) | `email-smtp.us-east-1.amazonaws.com` | Yes |
+| `RELAY_HOST` | Upstream SMTP relay hostname — works with any provider (e.g. email-smtp.us-east-1.amazonaws.com for AWS SES, smtp.gmail.com for Gmail, smtp.mailgun.org for Mailgun) | `\email-smtp.us-east-1.amazonaws.com` | Yes |
 | `RELAY_LOGIN` | SASL username for authenticating with the upstream relay | - | Yes |
 | `RELAY_PASSWORD` | SASL password for authenticating with the upstream relay | - | Yes |
 | `RELAY_PORT` | Upstream relay port (587 for STARTTLS, 465 for implicit TLS) | `587` | No |
 | `SMTP_TLS_SECURITY_LEVEL` | Outbound TLS level — encrypt (require TLS, default), may (opportunistic), or none (plaintext) | `encrypt` | No |
 | `MESSAGE_SIZE_LIMIT` | Maximum message size in bytes (default 10240000 = 10 MB, AWS SES supports up to 40 MB with limit increase) | `10240000` | No |
-| `ACCEPTED_NETWORKS` | Space-separated CIDRs allowed to send mail through this relay (default: 192.168.0.0/16 172.16.0.0/12 10.0.0.0/8) | `192.168.0.0/16` | No |
+| `ACCEPTED_NETWORKS` | Space-separated CIDRs allowed to send mail through this relay (default: 192.168.0.0/16 172.16.0.0/12 10.0.0.0/8) | `\192.168.0.0/16` | No |
 | `RECIPIENT_RESTRICTIONS` | Optional recipient filter — space-separated list of allowed email addresses, domains, or regex patterns. If set, only matching recipients are accepted; all others are rejected. Leave empty to allow all recipients. | `` | No |
 
 
