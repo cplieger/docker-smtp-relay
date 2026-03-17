@@ -178,6 +178,32 @@ reference library with 177 tests. ShellCheck enforced in CI.
 Not tested via unit tests: the Postfix config generation and daemon
 startup — validated on first deploy via the TCP port healthcheck.
 
+## Security Review
+
+**No vulnerabilities found.** Custom code is clean across all
+tools.
+
+| Tool | Result |
+|------|--------|
+| [shellcheck](https://www.shellcheck.net/) | Clean |
+| [hadolint](https://github.com/hadolint/hadolint) | DL3018 (unpinned apk, accepted) |
+| [gitleaks](https://github.com/gitleaks/gitleaks) | No secrets detected |
+| [trivy](https://trivy.dev/) | Clean |
+| [grype](https://github.com/anchore/grype) | Clean |
+| [semgrep](https://semgrep.dev/) | 1 info (missing USER, expected) |
+
+The entrypoint validates all env vars before generating Postfix
+config: newline injection, numeric validation, open-relay CIDR
+rejection (`0.0.0.0/0` blocked), and TLS level allowlisting.
+SASL credentials are written with umask 077 and the plaintext
+file is removed after `postmap`. Runs as root (required for
+port 25). Postfix drops privileges internally.
+
+**Details for advanced users:** Recipient filtering uses properly
+escaped regex patterns. The container runs relay-only with no
+local delivery. Postfix runs as PID 1 via `start-fg` for proper
+signal handling.
+
 ## Dependencies
 
 All dependencies are updated automatically via [Renovate](https://github.com/renovatebot/renovate) and pinned by digest or version for reproducibility.
