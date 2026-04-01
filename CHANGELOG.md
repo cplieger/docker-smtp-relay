@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026.04.01-c71639f (2026-04-01)
+
+### Added
+
+- Add validation to prevent open relay configuration
+
+### Fixed
+
+- Improve credential handling and regex escaping
+- Simplify to postfix-only architecture
+
+### Security
+
+- Improve error handling, validation, and security
+
+### Changed
+
+- Quote port mapping in compose file
+- Migrate to structured logging and enhance validation
+- Consolidate age encryption hooks and re-encrypt all env files
+- Update memory limits and SMTP healthcheck across services
+- Rename ses-relay to smtp-relay across infrastructure
+
 ## 2026.03.12-b843b96 (2026-03-12)
 
 ### Fixed
