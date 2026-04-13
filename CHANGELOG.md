@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026.04.13-98ff0b3 (2026-04-13)
+
+### Fixed
+
+- Improve input validation and security hardening
+
 ## 2026.04.01-c71639f (2026-04-01)
 
 ### Added

@@ -1,5 +1,5 @@
 #!/bin/sh
-set -eu
+set -euf
 
 # ---------------------------------------------------------------------------
 # Default configuration
@@ -46,6 +46,14 @@ validate_no_newlines "RECIPIENT_RESTRICTIONS" "$RECIPIENT_RESTRICTIONS"
 validate_no_newlines "SMTP_TLS_SECURITY_LEVEL" "$SMTP_TLS_SECURITY_LEVEL"
 validate_no_newlines "MESSAGE_SIZE_LIMIT" "$MESSAGE_SIZE_LIMIT"
 
+# Reject RELAY_HOST values with spaces or shell metacharacters
+case "$RELAY_HOST" in
+    *[[:space:]]*|*\;*|*\&*|*\|*|*\`*|*\$*)
+        printf 'level=error msg="RELAY_HOST contains invalid characters" value="%s"\n' "$RELAY_HOST" >&2
+        exit 1
+        ;;
+esac
+
 validate_numeric "RELAY_PORT" "$RELAY_PORT"
 validate_numeric "MESSAGE_SIZE_LIMIT" "$MESSAGE_SIZE_LIMIT"
 
@@ -65,8 +73,13 @@ elif [ -z "$RELAY_LOGIN" ] || [ -z "$RELAY_PASSWORD" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Validate ACCEPTED_NETWORKS — reject open-relay configs
+# Validate ACCEPTED_NETWORKS — reject open-relay and overly broad configs
 # ---------------------------------------------------------------------------
+if [ -z "$ACCEPTED_NETWORKS" ]; then
+    printf 'level=error msg="ACCEPTED_NETWORKS is empty"\n' >&2
+    exit 1
+fi
+
 for net in $ACCEPTED_NETWORKS; do
     case "$net" in
         0.0.0.0/0|::/0)
@@ -74,6 +87,22 @@ for net in $ACCEPTED_NETWORKS; do
             exit 1
             ;;
     esac
+    # Reject CIDRs broader than /8 (>16M hosts) — likely misconfiguration
+    prefix="${net##*/}"
+    if [ "$prefix" = "$net" ]; then
+        printf 'level=error msg="ACCEPTED_NETWORKS entry missing CIDR prefix" network=%s\n' "$net" >&2
+        exit 1
+    fi
+    case "$prefix" in
+        ''|*[!0-9]*)
+            printf 'level=error msg="ACCEPTED_NETWORKS entry has non-numeric prefix" network=%s\n' "$net" >&2
+            exit 1
+            ;;
+    esac
+    if [ "$prefix" -lt 8 ]; then
+        printf 'level=error msg="ACCEPTED_NETWORKS CIDR too broad (min /8)" network=%s prefix=%s\n' "$net" "$prefix" >&2
+        exit 1
+    fi
 done
 
 # Validate TLS level against known Postfix values
@@ -84,6 +113,16 @@ case "$SMTP_TLS_SECURITY_LEVEL" in
         exit 1
         ;;
 esac
+
+# Warn when TLS level allows cleartext relay — credentials may be exposed
+case "$SMTP_TLS_SECURITY_LEVEL" in
+    none|may)
+        printf 'level=warn msg="TLS security level allows cleartext relay — credentials may be exposed" level=%s\n' \
+            "$SMTP_TLS_SECURITY_LEVEL" >&2
+        ;;
+esac
+
+printf 'level=info msg="input validation passed"\n' >&2
 
 # ---------------------------------------------------------------------------
 # Bracket relayhost to skip MX lookups and handle IPv6 safely
@@ -118,6 +157,14 @@ fi
 # ---------------------------------------------------------------------------
 # Recipient filtering
 # ---------------------------------------------------------------------------
+
+# Escape Postfix regexp metacharacters for use in recipient_access tables.
+# ] must be first in the character class per POSIX; # delimiter avoids
+# conflict with literal /.
+escape_postfix_regex() {
+    printf '%s' "$1" | sed 's#[].[\\^$*+?(){|/]#\\&#g'
+}
+
 SMTPD_RECIPIENT_RESTRICTIONS="permit_mynetworks, reject"
 
 if [ -n "$RECIPIENT_RESTRICTIONS" ]; then
@@ -125,17 +172,14 @@ if [ -n "$RECIPIENT_RESTRICTIONS" ]; then
     : > "$RCPT_FILE"
     for token in $RECIPIENT_RESTRICTIONS; do
         case "$token" in
+            # Raw Postfix regexp — pass through verbatim
             /*/)
                 printf '%s OK\n' "$token" >> "$RCPT_FILE" ;;
             *@*)
-                # Escape regex metacharacters and the / delimiter used by
-                # Postfix regexp tables. ] must be first in the character class
-                # per POSIX; # delimiter avoids conflict with literal /.
-                esc=$(printf '%s' "$token" | sed 's#[].[\\^$*+?(){|/]#\\&#g')
+                esc=$(escape_postfix_regex "$token")
                 printf '/^%s$/ OK\n' "$esc" >> "$RCPT_FILE" ;;
             *)
-                # Domain match — same escaping as above
-                esc=$(printf '%s' "$token" | sed 's#[].[\\^$*+?(){|/]#\\&#g')
+                esc=$(escape_postfix_regex "$token")
                 printf '/@%s$/ OK\n' "$esc" >> "$RCPT_FILE" ;;
         esac
     done
