@@ -4,7 +4,7 @@
 [![GitHub release](https://img.shields.io/github/v/release/cplieger/docker-smtp-relay)](https://github.com/cplieger/docker-smtp-relay/releases)
 [![Image Size](https://ghcr-badge.egpl.dev/cplieger/smtp-relay/size)](https://github.com/cplieger/docker-smtp-relay/pkgs/container/smtp-relay)
 ![Platforms](https://img.shields.io/badge/platforms-amd64%20%7C%20arm64-blue)
-![base: Alpine 3.23.3](https://img.shields.io/badge/base-Alpine_3.23.3-0D597F?logo=alpinelinux)
+![base: Alpine 3.23.4](https://img.shields.io/badge/base-Alpine_3.23.4-0D597F?logo=alpinelinux)
 
 Postfix SMTP relay with env-var-driven configuration
 
@@ -210,7 +210,7 @@ All dependencies are updated automatically via [Renovate](https://github.com/ren
 
 | Dependency | Version | Source |
 |------------|---------|--------|
-| alpine | `3.23.3` | [Alpine](https://hub.docker.com/_/alpine) |
+| alpine | `3.23.4` | [Alpine](https://hub.docker.com/_/alpine) |
 
 ## Design Principles
 
