@@ -12,19 +12,19 @@ Postfix SMTP relay with env-var-driven configuration
 
 Runs a Postfix SMTP relay in a minimal Alpine container. Accepts mail on
 port 25 from your local network and relays it through any configurable
-upstream SMTP server. Postfix runs as PID 1 in foreground mode — if it
+upstream SMTP server. Postfix runs as PID 1 in foreground mode; if it
 crashes, the container exits and Docker's restart policy recovers it.
 Supports SASL authentication, TLS encryption, and optional recipient
 filtering, all configured via environment variables at startup.
 
 **Example use cases:**
 
-- **AWS SES**: Set `RELAY_HOST=email-smtp.us-east-1.amazonaws.com` with your IAM SMTP credentials. Services on your LAN send to port 25 — the relay handles SES authentication and TLS.
+- **AWS SES**: Set `RELAY_HOST=email-smtp.us-east-1.amazonaws.com` with your IAM SMTP credentials. Services on your LAN send to port 25; the relay handles SES authentication and TLS.
 - **Gmail**: Set `RELAY_HOST=smtp.gmail.com` with an App Password. Useful for sending alerts from devices that don't support OAuth2.
 - **Mailgun / Sendgrid / Generic SMTP**: Any provider that accepts SMTP with STARTTLS on port 587 works out of the box.
-- **Multi-service homelab**: NAS notifications, Grafana alerts, Paperless-ngx, Uptime Kuma, IoT devices — point them all at `<host-ip>:25` with no per-service SMTP configuration.
+- **Multi-service homelab**: NAS notifications, Grafana alerts, Paperless-ngx, Uptime Kuma, IoT devices; point them all at `<host-ip>:25` with no per-service SMTP configuration.
 
-This is an Alpine-based container that runs as root — Postfix requires
+This is an Alpine-based container that runs as root; Postfix requires
 root for port 25 binding and config file permissions.
 
 
@@ -32,7 +32,7 @@ root for port 25 binding and config file permissions.
 
 The upstream [Postfix](https://www.postfix.org/) is a full MTA that
 requires significant configuration. This image is pre-configured as a
-relay-only setup with environment-variable-driven configuration —
+relay-only setup with environment-variable-driven configuration;
 no config files to write, just set env vars and go.
 
 ## Container Registries
@@ -63,33 +63,23 @@ services:
     container_name: smtp-relay
     restart: unless-stopped
     user: "0:0"  # required for config file permissions
-    mem_limit: 128m
 
     environment:
       TZ: "Europe/Paris"
-      RELAY_HOST: "\\email-smtp.us-east-1.amazonaws.com"  # any SMTP provider hostname
+      RELAY_HOST: "email-smtp.us-east-1.amazonaws.com"  # any SMTP provider hostname
       RELAY_LOGIN: "your-relay-login"
       RELAY_PASSWORD: "your-relay-password"
       RELAY_PORT: "587"  # 587 = STARTTLS, 465 = implicit TLS
-      SMTP_TLS_SECURITY_LEVEL: "encrypt"  # encrypt, may, or none
+      SMTP_TLS_SECURITY_LEVEL: "secure"  # secure (default), verify, encrypt, may, or none
       MESSAGE_SIZE_LIMIT: "10240000"  # in bytes, default 10 MB
-      ACCEPTED_NETWORKS: "\\192.168.0.0/16"  # CIDRs that can relay mail
+      ACCEPTED_NETWORKS: "192.168.0.0/16"  # CIDRs that can relay mail
       RECIPIENT_RESTRICTIONS: ""
 
     ports:
       - "25:25"
 
     volumes:
-      - "\\/opt/appdata/smtp-relay:/var/spool/postfix"  # persistent mail queue
-
-    healthcheck:
-      test:
-        - CMD-SHELL
-        - nc -z 127.0.0.1 25
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 15s
+      - "/opt/appdata/smtp-relay:/var/spool/postfix"  # persistent mail queue
 ```
 
 ## Deployment
@@ -98,7 +88,7 @@ services:
 2. Set `RELAY_LOGIN` and `RELAY_PASSWORD` with your SMTP credentials.
 3. Set `ACCEPTED_NETWORKS` to the CIDRs allowed to relay mail (default: RFC 1918 ranges).
 4. Mount a persistent volume to `/var/spool/postfix` so queued mail survives container restarts.
-5. Port 25 requires root — this container runs as root.
+5. Port 25 requires root; this container runs as root.
 6. Point your services at `<host-ip>:25` as their SMTP server. No authentication is needed from accepted networks.
 
 For additional configuration options not covered by this image's environment variables, refer to the [Postfix documentation](https://www.postfix.org/documentation.html).
@@ -108,14 +98,14 @@ For additional configuration options not covered by this image's environment var
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|
 | `TZ` | Container timezone | `Europe/Paris` | No |
-| `RELAY_HOST` | Upstream SMTP relay hostname — works with any provider (e.g. email-smtp.us-east-1.amazonaws.com for AWS SES, smtp.gmail.com for Gmail, smtp.mailgun.org for Mailgun) | `\email-smtp.us-east-1.amazonaws.com` | Yes |
+| `RELAY_HOST` | Upstream SMTP relay hostname; works with any provider (e.g. email-smtp.us-east-1.amazonaws.com for AWS SES, smtp.gmail.com for Gmail, smtp.mailgun.org for Mailgun) | `email-smtp.us-east-1.amazonaws.com` | Yes |
 | `RELAY_LOGIN` | SASL username for authenticating with the upstream relay | - | Yes |
 | `RELAY_PASSWORD` | SASL password for authenticating with the upstream relay | - | Yes |
 | `RELAY_PORT` | Upstream relay port (587 for STARTTLS, 465 for implicit TLS) | `587` | No |
-| `SMTP_TLS_SECURITY_LEVEL` | Outbound TLS level — encrypt (require TLS, default), may (opportunistic), or none (plaintext) | `encrypt` | No |
+| `SMTP_TLS_SECURITY_LEVEL` | Outbound TLS level. Default: secure (TLS required, certificate chain + hostname verification against smtp_tls_CAfile). Also supported: verify (chain only, no hostname match), encrypt (TLS required, no cert verification), dane / dane-only / fingerprint (advanced), may (opportunistic TLS), none (plaintext, credentials exposed). | `secure` | No |
 | `MESSAGE_SIZE_LIMIT` | Maximum message size in bytes (default 10240000 = 10 MB, AWS SES supports up to 40 MB with limit increase) | `10240000` | No |
-| `ACCEPTED_NETWORKS` | Space-separated CIDRs allowed to send mail through this relay (default: 192.168.0.0/16 172.16.0.0/12 10.0.0.0/8) | `\192.168.0.0/16` | No |
-| `RECIPIENT_RESTRICTIONS` | Optional recipient filter — space-separated list of allowed email addresses, domains, or regex patterns. If set, only matching recipients are accepted; all others are rejected. Leave empty to allow all recipients. | `` | No |
+| `ACCEPTED_NETWORKS` | Space-separated CIDRs allowed to send mail through this relay (default: 192.168.0.0/16). The entrypoint falls back to all RFC 1918 ranges if unset, but the shipped compose defaults to 192.168.0.0/16. | `192.168.0.0/16` | No |
+| `RECIPIENT_RESTRICTIONS` | Optional recipient filter; space-separated list of allowed email addresses, domains, or regex patterns. If set, only matching recipients are accepted; all others are rejected. Leave empty to allow all recipients. | `` | No |
 
 
 ## Volumes
@@ -133,19 +123,20 @@ For additional configuration options not covered by this image's environment var
 
 ## Docker Healthcheck
 
-The healthcheck verifies Postfix is accepting TCP connections on port 25.
-This confirms the relay process is running and the port is bound.
+The healthcheck verifies Postfix is accepting connections on port 25 and
+returning a valid SMTP 220 banner. This confirms the relay process is
+running, the port is bound, and Postfix is ready to accept mail.
 
 **When it becomes unhealthy:**
 - Postfix hasn't finished starting yet (during `start_period`)
 - Postfix is running but not accepting connections (config error, port binding failure)
-- Postfix crashed — the container exits entirely and Docker restarts it
+- Postfix crashed; the container exits entirely and Docker restarts it
 
 **When it recovers:**
 - Postfix starts accepting connections on port 25. Recovery is automatic after a restart.
 
 **Process model:** Postfix runs as PID 1 via `start-fg`. If Postfix
-dies, the container exits immediately — Docker's `restart: unless-stopped`
+dies, the container exits immediately; Docker's `restart: unless-stopped`
 brings it back. There is no supervisor or watchdog process.
 
 To check health manually:
@@ -155,7 +146,7 @@ docker inspect --format='{{json .State.Health.Log}}' smtp-relay | python3 -m jso
 
 | Type | Command | Meaning |
 |------|---------|---------|
-| TCP port check | `nc -z 127.0.0.1 25` | Postfix is accepting connections on port 25 |
+| SMTP banner check | `nc -w 3 127.0.0.1 25 < /dev/null \| grep -q '^220 '` | Postfix is accepting connections and returning a valid SMTP 220 banner |
 
 
 ## Code Quality
@@ -163,20 +154,22 @@ docker inspect --format='{{json .State.Health.Log}}' smtp-relay | python3 -m jso
 | Metric | Value |
 |--------|-------|
 | Language | POSIX shell (Alpine) |
-| Entrypoint | 193 lines |
+| Entrypoint | 385 lines |
 | Static Analysis | [ShellCheck](https://www.shellcheck.net/) (enforced in CI) |
-| Validation Tests | 177 |
-| Input Validation | Newline injection, numeric, open-relay CIDR, TLS level |
+| Validation Tests | 242 |
+| Input Validation | Newline injection, numeric range, shell metacharacters, open-relay CIDR, TLS level, SASL field format |
 
 The entrypoint generates Postfix config from environment variables
 with security-focused input validation: newline injection prevention,
-numeric parameter validation, open-relay CIDR rejection
-(`0.0.0.0/0`, `::/0`), TLS security level validation, and SASL
-credential pairing. The validation logic is tested via a shared
-reference library with 177 tests. ShellCheck enforced in CI.
+numeric range assertions (port 1-65535, message size ≤ 100 MB),
+shell-metacharacter rejection on hostnames, open-relay CIDR rejection
+(`0.0.0.0/0`, `::/0`, prefixes below /8), TLS security level allowlist,
+and SASL credential field-format validation (whitespace/colon rejection).
+The validation logic mirrors a shared reference library covered by
+222 tests. ShellCheck enforced in CI.
 
 Not tested via unit tests: the Postfix config generation and daemon
-startup — validated on first deploy via the TCP port healthcheck.
+startup; validated on first deploy via the TCP port healthcheck.
 
 ## Security Review
 
@@ -193,11 +186,16 @@ tools.
 | [semgrep](https://semgrep.dev/) | 1 info (missing USER, expected) |
 
 The entrypoint validates all env vars before generating Postfix
-config: newline injection, numeric validation, open-relay CIDR
-rejection (`0.0.0.0/0` blocked), and TLS level allowlisting.
+config: newline injection, numeric range, shell metacharacters,
+open-relay CIDR rejection (`0.0.0.0/0` blocked, prefixes ≥/8 required),
+TLS level allowlisting, and SASL credential field-format checks.
+Outbound TLS pins `>=TLSv1.2` and `high` cipher grade; default
+security level is `secure` (chain + hostname verification).
 SASL credentials are written with umask 077 and the plaintext
-file is removed after `postmap`. Runs as root (required for
-port 25). Postfix drops privileges internally.
+file is removed after `postmap` (trap-guarded against partial
+failure). Runs as root (required for port 25) with
+`no-new-privileges:true` to block post-compromise setuid
+escalation. Postfix drops privileges internally.
 
 **Details for advanced users:** Recipient filtering uses properly
 escaped regex patterns. The container runs relay-only with no

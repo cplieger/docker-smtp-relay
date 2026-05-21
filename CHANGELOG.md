@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026.05.17-fd05130 (2026-05-21)
+
+### Added
+
+- Add file-based healthcheck for distroless containers
+- Tighten TLS posture, add input range validation, fail fast on misconfig
+
+### Security
+
+- Move healthcheck to Dockerfile and harden security
+
+### Changed
+
+- Annotate entrypoint sources for stricter shellcheck
+- Compact skill specs + refactor age/nut-upsd/smtp-relay/docker-cron + kweb improvements (#289)
+- Simplify healthcheck documentation
+- Refactor compose (no user-visible change)
+
 ## 2026.04.16-cedf8b7 (2026-04-16)
 
 ### Dependencies

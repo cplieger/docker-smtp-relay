@@ -9,7 +9,11 @@ RUN apk add --no-cache \
         postfix \
         tzdata
 
+COPY --chmod=755 validate.sh /usr/local/bin/validate.sh
+COPY --chmod=755 recipient-filter.sh /usr/local/bin/recipient-filter.sh
 COPY --chmod=755 entrypoint.sh /usr/local/bin/entrypoint.sh
 
 EXPOSE 25
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=15s \
+    CMD nc -w 3 127.0.0.1 25 < /dev/null | grep -q '^220 ' || exit 1
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
