@@ -1,6 +1,6 @@
 services:
   smtp-relay:
-    image: ghcr.io/cplieger/smtp-relay:latest@sha256:63cebc0da88a974bfb6344bf8bd14f70623d6f9002a93b6855fb0e50c65cbf3b
+    image: ghcr.io/cplieger/smtp-relay:latest
     container_name: smtp-relay
     restart: unless-stopped
     user: "0:0"  # required for config file permissions
