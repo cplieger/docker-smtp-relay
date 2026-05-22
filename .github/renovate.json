@@ -34,5 +34,27 @@
   ],
   "ignorePaths": [
     "compose.yaml"
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Dockerfile ARG versions with renovate comments",
+      "managerFilePatterns": [
+        "/Dockerfile$/"
+      ],
+      "matchStrings": [
+        "#\\s*renovate:\\s*datasource=(?<datasource>[a-z-]+)\\s+depName=(?<depName>[^\\s]+)(\\s+versioning=(?<versioning>[a-z-]+))?\\nARG\\s+\\w+=(?<currentValue>\\S+)"
+      ]
+    },
+    {
+      "customType": "regex",
+      "description": "Workflow shell pins (git-cliff, etc.)",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/.+\\.yaml$/"
+      ],
+      "matchStrings": [
+        "#\\s*renovate:\\s*datasource=(?<datasource>[a-z-]+)\\s+depName=(?<depName>[^\\s]+)(\\s+versioning=(?<versioning>[a-z-]+))?\\s*\\n\\s*VERSION=(?<currentValue>\\S+)"
+      ]
+    }
   ]
 }
