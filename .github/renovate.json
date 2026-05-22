@@ -56,5 +56,8 @@
         "#\\s*renovate:\\s*datasource=(?<datasource>[a-z-]+)\\s+depName=(?<depName>[^\\s]+)(\\s+versioning=(?<versioning>[a-z-]+))?\\s*\\n\\s*VERSION=(?<currentValue>\\S+)"
       ]
     }
+  ],
+  "dependencyDashboardLabels": [
+    "renovate"
   ]
 }
