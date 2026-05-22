@@ -1,22 +1,38 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:best-practices"],
+  "extends": [
+    "config:best-practices"
+  ],
   "timezone": "Europe/Paris",
   "automerge": true,
   "automergeType": "pr",
   "platformAutomerge": true,
-  "labels": ["dependencies"],
+  "labels": [
+    "dependencies"
+  ],
   "packageRules": [
     {
       "description": "Auto-merge minor, patch, digest, pin",
-      "matchUpdateTypes": ["minor", "patch", "digest", "pin"],
+      "matchUpdateTypes": [
+        "minor",
+        "patch",
+        "digest",
+        "pin"
+      ],
       "automerge": true
     },
     {
       "description": "Major updates require manual approval",
-      "matchUpdateTypes": ["major"],
+      "matchUpdateTypes": [
+        "major"
+      ],
       "automerge": false,
-      "labels": ["major-update"]
+      "labels": [
+        "major-update"
+      ]
     }
+  ],
+  "ignorePaths": [
+    "compose.yaml"
   ]
 }
