@@ -6,16 +6,11 @@
 ![Platforms](https://img.shields.io/badge/platforms-amd64%20%7C%20arm64-blue)
 ![base: Alpine 3.23.4](https://img.shields.io/badge/base-Alpine_3.23.4-0D597F?logo=alpinelinux)
 
-Postfix SMTP relay with env-var-driven configuration
+Point all your services at one container for outbound email — no per-app SMTP setup needed.
 
-## Overview
+## What it does
 
-Runs a Postfix SMTP relay in a minimal Alpine container. Accepts mail on
-port 25 from your local network and relays it through any configurable
-upstream SMTP server. Postfix runs as PID 1 in foreground mode; if it
-crashes, the container exits and Docker's restart policy recovers it.
-Supports SASL authentication, TLS encryption, and optional recipient
-filtering, all configured via environment variables at startup.
+Accepts email from services on your local network and forwards it through a real email provider (Gmail, AWS SES, Mailgun, etc.). Your apps just point at this container on port 25 — no per-service SMTP configuration needed.
 
 **Example use cases:**
 
@@ -24,37 +19,16 @@ filtering, all configured via environment variables at startup.
 - **Mailgun / Sendgrid / Generic SMTP**: Any provider that accepts SMTP with STARTTLS on port 587 works out of the box.
 - **Multi-service homelab**: NAS notifications, Grafana alerts, Paperless-ngx, Uptime Kuma, IoT devices; point them all at `<host-ip>:25` with no per-service SMTP configuration.
 
-This is an Alpine-based container that runs as root; Postfix requires
-root for port 25 binding and config file permissions.
+### Why this design
 
+- **Env-var config, not Postfix config files** — set a few environment variables and go; no need to learn Postfix's configuration syntax or maintain `main.cf` templates.
+- **Relay-only, not a full MTA** — no local delivery, no mailbox management, no inbound routing. Does one thing well: accept mail and forward it upstream.
+- **Strict input validation** — newline injection prevention, numeric range assertions, shell-metacharacter rejection, open-relay CIDR blocking, TLS level allowlisting, and SASL credential format checks all run before Postfix starts.
+- **Postfix as PID 1** — runs in foreground mode for proper signal handling; if it crashes, the container exits and Docker's restart policy recovers it cleanly.
 
-### How It Differs From Postfix
+## Quick start
 
-The upstream [Postfix](https://www.postfix.org/) is a full MTA that
-requires significant configuration. This image is pre-configured as a
-relay-only setup with environment-variable-driven configuration;
-no config files to write, just set env vars and go.
-
-## Container Registries
-
-This image is published to both GHCR and Docker Hub:
-
-| Registry | Image |
-|----------|-------|
-| GHCR | `ghcr.io/cplieger/smtp-relay` |
-| Docker Hub | `docker.io/cplieger/smtp-relay` |
-
-```bash
-# Pull from GHCR
-docker pull ghcr.io/cplieger/smtp-relay:latest
-
-# Pull from Docker Hub
-docker pull cplieger/smtp-relay:latest
-```
-
-Both registries receive identical images and tags. Use whichever you prefer.
-
-## Quick Start
+Available from both GHCR (`ghcr.io/cplieger/smtp-relay`) and Docker Hub (`docker.io/cplieger/smtp-relay`).
 
 ```yaml
 services:
@@ -82,18 +56,9 @@ services:
       - "/opt/appdata/smtp-relay:/var/spool/postfix"  # persistent mail queue
 ```
 
-## Deployment
+## Configuration reference
 
-1. Set `RELAY_HOST` to your SMTP provider's hostname.
-2. Set `RELAY_LOGIN` and `RELAY_PASSWORD` with your SMTP credentials.
-3. Set `ACCEPTED_NETWORKS` to the CIDRs allowed to relay mail (default: RFC 1918 ranges).
-4. Mount a persistent volume to `/var/spool/postfix` so queued mail survives container restarts.
-5. Port 25 requires root; this container runs as root.
-6. Point your services at `<host-ip>:25` as their SMTP server. No authentication is needed from accepted networks.
-
-For additional configuration options not covered by this image's environment variables, refer to the [Postfix documentation](https://www.postfix.org/documentation.html).
-
-## Environment Variables
+### Environment variables
 
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|
@@ -107,49 +72,23 @@ For additional configuration options not covered by this image's environment var
 | `ACCEPTED_NETWORKS` | Space-separated CIDRs allowed to send mail through this relay (default: 192.168.0.0/16). The entrypoint falls back to all RFC 1918 ranges if unset, but the shipped compose defaults to 192.168.0.0/16. | `192.168.0.0/16` | No |
 | `RECIPIENT_RESTRICTIONS` | Optional recipient filter; space-separated list of allowed email addresses, domains, or regex patterns. If set, only matching recipients are accepted; all others are rejected. Leave empty to allow all recipients. | `` | No |
 
-
-## Volumes
+### Volumes
 
 | Mount | Description |
 |-------|-------------|
 | `/var/spool/postfix` | Postfix mail spool (persistent queue) |
 
-## Ports
+### Ports
 
 | Port | Description |
 |------|-------------|
 | `25` | SMTP relay (accepts mail from local network) |
 
+## Healthcheck
 
-## Docker Healthcheck
+The healthcheck verifies Postfix is accepting connections on port 25 and returning a valid SMTP 220 banner, confirming the relay process is running, the port is bound, and Postfix is ready to accept mail. Postfix runs as PID 1 via `start-fg`; if it dies, the container exits immediately and Docker's `restart: unless-stopped` brings it back — no supervisor or watchdog needed.
 
-The healthcheck verifies Postfix is accepting connections on port 25 and
-returning a valid SMTP 220 banner. This confirms the relay process is
-running, the port is bound, and Postfix is ready to accept mail.
-
-**When it becomes unhealthy:**
-- Postfix hasn't finished starting yet (during `start_period`)
-- Postfix is running but not accepting connections (config error, port binding failure)
-- Postfix crashed; the container exits entirely and Docker restarts it
-
-**When it recovers:**
-- Postfix starts accepting connections on port 25. Recovery is automatic after a restart.
-
-**Process model:** Postfix runs as PID 1 via `start-fg`. If Postfix
-dies, the container exits immediately; Docker's `restart: unless-stopped`
-brings it back. There is no supervisor or watchdog process.
-
-To check health manually:
-```bash
-docker inspect --format='{{json .State.Health.Log}}' smtp-relay | python3 -m json.tool
-```
-
-| Type | Command | Meaning |
-|------|---------|---------|
-| SMTP banner check | `nc -w 3 127.0.0.1 25 < /dev/null \| grep -q '^220 '` | Postfix is accepting connections and returning a valid SMTP 220 banner |
-
-
-## Code Quality
+## Code quality
 
 | Metric | Value |
 |--------|-------|
@@ -171,7 +110,7 @@ The validation logic mirrors a shared reference library covered by
 Not tested via unit tests: the Postfix config generation and daemon
 startup; validated on first deploy via the TCP port healthcheck.
 
-## Security Review
+## Security
 
 **No vulnerabilities found.** Custom code is clean across all
 tools.
@@ -210,18 +149,14 @@ All dependencies are updated automatically via [Renovate](https://github.com/ren
 |------------|---------|--------|
 | alpine | `3.23.4` | [Alpine](https://hub.docker.com/_/alpine) |
 
-## Design Principles
-
-- **Always up to date**: Base images, packages, and libraries are updated automatically via Renovate. Unlike many community Docker images that ship outdated or abandoned dependencies, these images receive continuous updates.
-- **Minimal attack surface**: When possible, pure Go apps use `gcr.io/distroless/static:nonroot` (no shell, no package manager, runs as non-root). Apps requiring system packages use Alpine with the minimum necessary privileges.
-- **Digest-pinned**: Every `FROM` instruction pins a SHA256 digest. All GitHub Actions are digest-pinned.
-- **Multi-platform**: Built for `linux/amd64` and `linux/arm64`.
-- **Healthchecks**: Every container includes a Docker healthcheck.
-- **Provenance**: Build provenance is attested via GitHub Actions, verifiable with `gh attestation verify`.
-
 ## Credits
 
 This project packages [Postfix](https://github.com/vdukhovni/postfix) into a container image. All credit for the core functionality goes to the upstream maintainers.
+
+## Contributing
+
+Issues and pull requests are welcome. Please open an issue first for
+larger changes so the approach can be discussed before implementation.
 
 ## Disclaimer
 
