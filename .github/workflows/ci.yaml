@@ -1,0 +1,107 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - '*.md'
+      - 'docs/**'
+      - 'LICENSE*'
+      - 'AUTHORS*'
+      - 'CHANGELOG*'
+      - 'CONTRIBUTORS*'
+      - '.gitignore'
+      - '.gitattributes'
+      - '.editorconfig'
+      - '**/*.png'
+      - '**/*.jpg'
+      - '**/*.jpeg'
+      - '**/*.gif'
+      - '**/*.svg'
+      - '**/*.webp'
+      - '**/*.ico'
+      - '**/*.bmp'
+  push:
+    paths-ignore:
+      - '**/*.md'
+      - '*.md'
+      - 'docs/**'
+      - 'LICENSE*'
+      - 'AUTHORS*'
+      - 'CHANGELOG*'
+      - 'CONTRIBUTORS*'
+      - '.gitignore'
+      - '.gitattributes'
+      - '.editorconfig'
+      - '**/*.png'
+      - '**/*.jpg'
+      - '**/*.jpeg'
+      - '**/*.gif'
+      - '**/*.svg'
+      - '**/*.webp'
+      - '**/*.ico'
+      - '**/*.bmp'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Install actionlint
+        run: |
+          # renovate: datasource=github-releases depName=rhysd/actionlint
+          VERSION=v1.7.12
+          curl -fsSL "https://github.com/rhysd/actionlint/releases/download/${VERSION}/actionlint_${VERSION#v}_linux_amd64.tar.gz" \
+            | tar -xzf - -C /tmp actionlint
+          sudo mv /tmp/actionlint /usr/local/bin/actionlint
+
+      - name: Lint workflows (actionlint)
+        continue-on-error: true
+        run: |
+          (
+            actionlint -color
+          ) || { echo "Lint workflows (actionlint)" >> /tmp/_ci_failures; exit 1; }
+
+      - name: Lint shell scripts
+        continue-on-error: true
+        run: |
+          (
+            shellcheck -x -S info *.sh
+          ) || { echo "Lint shell scripts" >> /tmp/_ci_failures; exit 1; }
+      - name: Validate Dockerfile
+        continue-on-error: true
+        run: |
+          (
+            docker run --rm -i hadolint/hadolint:2.12.0 \
+              hadolint --ignore DL3018 --ignore DL3008 - < Dockerfile
+          ) || { echo "Validate Dockerfile" >> /tmp/_ci_failures; exit 1; }
+
+      - name: Scan for secrets
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Check results
+        if: always()
+        run: |
+          if [ -f /tmp/_ci_failures ]; then
+            echo "::error::Failed validation steps:"
+            sort -u /tmp/_ci_failures >&2
+            exit 1
+          fi
+          echo "All validation steps passed"
