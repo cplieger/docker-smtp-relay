@@ -21,5 +21,4 @@ jobs:
     with:
       registries: "ghcr,dockerhub"
       notify-repo: "cplieger/homelab"
-      platforms: "arm64"
     secrets: inherit
