@@ -15,12 +15,10 @@ COPY --chmod=755 entrypoint.sh /usr/local/bin/entrypoint.sh
 
 EXPOSE 25
 
-# trivy:ignore:DS-0002 — Postfix master must run as root to bind port 25 (a
-# privileged port < 1024); smtpd workers drop to the postfix user internally
-# via Postfix's chroot + setuid model. Adding USER non-root at the Dockerfile
-# level would prevent the master from binding port 25 and break the relay.
-# Capability-only alternatives (CAP_NET_BIND_SERVICE) don't apply because
-# Postfix's privilege-separation model requires root for the master.
+# Note: this image runs as root by design — Postfix master needs root to bind
+# port 25; smtpd workers drop to the postfix user internally via setuid+chroot.
+# AVD-DS-0002 is suppressed via .trivyignore at the repo root; see the rationale
+# there.
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=15s \
     CMD nc -w 3 127.0.0.1 25 < /dev/null | grep -q '^220 ' || exit 1
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
