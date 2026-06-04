@@ -1,6 +1,6 @@
 services:
   smtp-relay:
-    image: ghcr.io/cplieger/smtp-relay:latest
+    image: ghcr.io/cplieger/docker-smtp-relay:latest
     container_name: smtp-relay
     restart: unless-stopped
     user: "0:0"  # required for config file permissions

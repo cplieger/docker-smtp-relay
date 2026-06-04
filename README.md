@@ -2,7 +2,7 @@
 
 ![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)
 [![GitHub release](https://img.shields.io/github/v/release/cplieger/docker-smtp-relay)](https://github.com/cplieger/docker-smtp-relay/releases)
-[![Image Size](https://ghcr-badge.egpl.dev/cplieger/smtp-relay/size)](https://github.com/cplieger/docker-smtp-relay/pkgs/container/smtp-relay)
+[![Image Size](https://ghcr-badge.egpl.dev/cplieger/docker-smtp-relay/size)](https://github.com/cplieger/docker-smtp-relay/pkgs/container/smtp-relay)
 ![Platforms](https://img.shields.io/badge/platforms-amd64%20%7C%20arm64-blue)
 ![base: Alpine 3.23.4](https://img.shields.io/badge/base-Alpine_3.23.4-0D597F?logo=alpinelinux)
 
@@ -28,12 +28,12 @@ Accepts email from services on your local network and forwards it through a real
 
 ## Quick start
 
-Available from both GHCR (`ghcr.io/cplieger/smtp-relay`) and Docker Hub (`docker.io/cplieger/smtp-relay`).
+Available from both GHCR (`ghcr.io/cplieger/docker-smtp-relay`) and Docker Hub (`docker.io/cplieger/docker-smtp-relay`).
 
 ```yaml
 services:
   smtp-relay:
-    image: ghcr.io/cplieger/smtp-relay:latest
+    image: ghcr.io/cplieger/docker-smtp-relay:latest
     container_name: smtp-relay
     restart: unless-stopped
     user: "0:0"  # required for config file permissions
