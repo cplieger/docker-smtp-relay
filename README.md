@@ -105,7 +105,7 @@ shell-metacharacter rejection on hostnames, open-relay CIDR rejection
 (`0.0.0.0/0`, `::/0`, prefixes below /8), TLS security level allowlist,
 and SASL credential field-format validation (whitespace/colon rejection).
 The validation logic mirrors a shared reference library covered by
-222 tests. ShellCheck enforced in CI.
+242 tests. ShellCheck enforced in CI.
 
 Not tested via unit tests: the Postfix config generation and daemon
 startup; validated on first deploy via the TCP port healthcheck.
