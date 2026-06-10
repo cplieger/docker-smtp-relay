@@ -88,28 +88,6 @@ services:
 
 The healthcheck verifies Postfix is accepting connections on port 25 and returning a valid SMTP 220 banner, confirming the relay process is running, the port is bound, and Postfix is ready to accept mail. Postfix runs as PID 1 via `start-fg`; if it dies, the container exits immediately and Docker's `restart: unless-stopped` brings it back — no supervisor or watchdog needed.
 
-## Code quality
-
-| Metric | Value |
-|--------|-------|
-| Language | POSIX shell (Alpine) |
-| Entrypoint | 385 lines |
-| Static Analysis | [ShellCheck](https://www.shellcheck.net/) (enforced in CI) |
-| Validation Tests | 242 |
-| Input Validation | Newline injection, numeric range, shell metacharacters, open-relay CIDR, TLS level, SASL field format |
-
-The entrypoint generates Postfix config from environment variables
-with security-focused input validation: newline injection prevention,
-numeric range assertions (port 1-65535, message size ≤ 100 MB),
-shell-metacharacter rejection on hostnames, open-relay CIDR rejection
-(`0.0.0.0/0`, `::/0`, prefixes below /8), TLS security level allowlist,
-and SASL credential field-format validation (whitespace/colon rejection).
-The validation logic mirrors a shared reference library covered by
-242 tests. ShellCheck enforced in CI.
-
-Not tested via unit tests: the Postfix config generation and daemon
-startup; validated on first deploy via the TCP port healthcheck.
-
 ## Security
 
 **No vulnerabilities found.** Custom code is clean across all
