@@ -54,7 +54,7 @@ docker build -t smtp-relay:dev .
 The `Dockerfile` sets `# check=error=true`, so BuildKit check warnings
 fail the build. There is no unit-test harness in this repo: the entrypoint
 validators mirror a shared reference library (see the `validate.sh` header
-note, "Keep in sync with `lib/shell/validate.sh`") whose 242 tests run in
+note, "Keep in sync with `lib/shell/validate.sh`") whose test suite runs in
 CI. If you change a validator here, port the same change to that library so
 the two stay aligned.
 

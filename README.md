@@ -124,9 +124,9 @@ signal handling.
 
 All dependencies are updated automatically via [Renovate](https://github.com/renovatebot/renovate) and pinned by digest or version for reproducibility.
 
-| Dependency | Version | Source |
-|------------|---------|--------|
-| alpine | `3.23.4` | [Alpine](https://hub.docker.com/_/alpine) |
+| Dependency | Source |
+|------------|--------|
+| alpine | [Alpine](https://hub.docker.com/_/alpine) |
 
 ## Credits
 
