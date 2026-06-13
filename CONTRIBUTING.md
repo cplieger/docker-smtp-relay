@@ -12,9 +12,16 @@ template — the entrypoint generates the whole config from environment
 variables at container start, validating every input before Postfix
 runs. Three scripts are copied into `/usr/local/bin/` and run as a unit:
 
-- `entrypoint.sh` — the orchestrator (PID 1). Applies defaults, runs the
-  validation pass, configures SASL, sources the recipient filter,
-  renders `/etc/postfix/main.cf`, then `exec postfix start-fg`.
+- `entrypoint.sh` — the orchestrator (PID 1). Runs in one of two modes
+  (dispatched on `$1`): `run` (default) applies defaults, validates,
+  configures SASL, renders the config, probes the upstream relay, then
+  `exec postfix start-fg`; `render` does defaults + validation + config
+  rendering only (no secrets written, no Postfix invoked) and is what the
+  golden-file tests drive. The generated files are written under `CONF_DIR`
+  (default `/etc/postfix`; the tests override it to a temp dir). Logic is
+  decomposed into functions (`apply_defaults`, `validate_config`,
+  `compute_sasl_state`, `render_main_cf`, `probe_upstream`, …) shared between
+  the two modes.
 - `validate.sh` — pure validation helpers (`validate_no_newlines`,
   `validate_numeric`, `validate_no_metacharacters`, `validate_range`,
   `validate_no_open_relay`, `validate_tls_level`, `validate_sasl_*`).
@@ -52,11 +59,32 @@ docker build -t smtp-relay:dev .
 ```
 
 The `Dockerfile` sets `# check=error=true`, so BuildKit check warnings
-fail the build. There is no unit-test harness in this repo: the entrypoint
-validators mirror a shared reference library (see the `validate.sh` header
-note, "Keep in sync with `lib/shell/validate.sh`") whose test suite runs in
-CI. If you change a validator here, port the same change to that library so
-the two stay aligned.
+fail the build. Config generation is covered by golden-file tests in
+`tests/`: `tests/render-test.sh` runs `entrypoint.sh render` across a matrix
+of env inputs and diffs the generated `main.cf` / `recipient_access` against
+the fixtures in `tests/golden/`, asserting exit 2 for invalid inputs. Run them
+locally from the repo root:
+
+```sh
+sh tests/render-test.sh
+```
+
+After an intended change to the generated config, regenerate the fixtures and
+review the diff before committing:
+
+```sh
+sh tests/render-test.sh --record
+```
+
+The build runs the same harness in a dedicated `test` stage (the final image
+`COPY --from=test` a marker, so the tests must pass before the image is
+produced); the centralized `ci / validate` Docker build-gate therefore runs
+them too.
+
+The entrypoint validators additionally mirror a shared reference library (see
+the `validate.sh` header note, "Keep in sync with `lib/shell/validate.sh`")
+whose own test suite runs in CI. If you change a validator here, port the same
+change to that library so the two stay aligned.
 
 ## Conventions and gotchas
 
@@ -79,10 +107,22 @@ the two stay aligned.
 - **Exit codes.** `2` = config/validation failure, `1` = runtime failure.
   Keep that split when adding new failure paths.
 - **Runs as root by design.** Postfix's master needs root to bind port 25;
-  workers drop privileges internally. `AVD-DS-0002` is suppressed in
-  `.trivyignore` with the rationale — don't add a `USER` line.
+  workers drop privileges internally. The Dockerfile sets `USER 0:0` as the
+  overridable default; the resulting `AVD-DS-0002` (trivy) and `DL3002`
+  (hadolint, "last USER root") findings are suppressed with rationale
+  (`.trivyignore` and an inline `# hadolint ignore=DL3002`). Keep root as the
+  default unless you also rework the port-25 bind.
 - **Logs are structured.** Status lines use `level=... msg="..."` key-value
   format so they parse cleanly in Loki/Grafana. Match it for new output.
+- **`render` mode must stay side-effect-free.** `entrypoint.sh render` may
+  only apply defaults, validate, and write the generated files under
+  `CONF_DIR`. Don't add `postmap`, `postfix`, secret writes, or `nc` to the
+  shared render path — those belong to `run`-only functions so the golden
+  tests stay runnable without root or a Postfix install.
+- **Startup probe is fail-soft.** `probe_upstream` is a plain TCP check and
+  must never block startup: a failure logs a warning and returns 0 so mail
+  still queues. Keep it bounded by `STARTUP_PROBE_TIMEOUT` (under the
+  healthcheck `--start-period`) and never make it attempt SASL AUTH.
 - Match the existing tab indentation in the shell scripts.
 
 ## Commits and PRs

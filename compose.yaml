@@ -3,7 +3,6 @@ services:
     image: ghcr.io/cplieger/docker-smtp-relay:latest
     container_name: smtp-relay
     restart: unless-stopped
-    user: "0:0"  # required for config file permissions
 
     environment:
       TZ: "Europe/Paris"
@@ -15,9 +14,10 @@ services:
       MESSAGE_SIZE_LIMIT: "10240000"  # in bytes, default 10 MB
       ACCEPTED_NETWORKS: "192.168.0.0/16"  # CIDRs that can relay mail
       RECIPIENT_RESTRICTIONS: ""
+      STARTUP_PROBE: "true"  # fail-soft TCP reachability check on the upstream relay at startup
 
     ports:
       - "25:25"
 
     volumes:
-      - "/opt/appdata/smtp-relay:/var/spool/postfix"  # persistent mail queue
+      - "/path/to/smtp-relay-spool:/var/spool/postfix"  # persistent mail queue (replace host path)

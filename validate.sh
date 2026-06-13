@@ -1,7 +1,8 @@
 #!/bin/sh
 # ---------------------------------------------------------------------------
 # validate.sh — input-validation helpers for smtp-relay entrypoint.
-# Sourced at runtime by entrypoint.sh. Keep in sync with lib/shell/validate.sh.
+# Sourced at runtime by entrypoint.sh. Canonical copy; there is no shared
+# validation library (the former lib/shell/validate.sh was removed).
 # ---------------------------------------------------------------------------
 
 # printf '%s' + trailing-newline strip lets a single trailing newline pass
@@ -15,8 +16,8 @@ validate_no_newlines() {
 	_val=${_val%x}
 	_val=${_val%"
 "}
-	line_count=$(printf '%s' "$_val" | wc -l)
-	if [ "$line_count" -gt 0 ]; then
+	_line_count=$(printf '%s' "$_val" | wc -l)
+	if [ "$_line_count" -gt 0 ]; then
 		printf 'level=error msg="env var contains embedded newlines" var=%s\n' "$1" >&2
 		return 1
 	fi
@@ -25,10 +26,17 @@ validate_no_newlines() {
 validate_numeric() {
 	case "$2" in
 	'' | *[!0-9]*)
-		printf 'level=error msg="env var must be a positive integer" var=%s value="%s"\n' "$1" "$2" >&2
+		printf 'level=error msg="env var must be a non-negative integer" var=%s value="%s"\n' "$1" "$2" >&2
 		return 1
 		;;
 	esac
+	# Reject values too long to compare as shell integers: test(1) aborts with
+	# "Illegal number" beyond LONG_MAX, and validate_range's `if` silently
+	# swallows that error and treats the value as in-range.
+	if [ "${#2}" -gt 18 ]; then
+		printf 'level=error msg="env var numeric value too large" var=%s value="%s"\n' "$1" "$2" >&2
+		return 1
+	fi
 }
 
 validate_no_metacharacters() {

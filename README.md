@@ -37,7 +37,8 @@ services:
     image: ghcr.io/cplieger/docker-smtp-relay:latest
     container_name: smtp-relay
     restart: unless-stopped
-    user: "0:0"  # required for config file permissions
+    security_opt:
+      - "no-new-privileges:true"  # block post-compromise setuid escalation
 
     environment:
       TZ: "Europe/Paris"
@@ -49,12 +50,13 @@ services:
       MESSAGE_SIZE_LIMIT: "10240000"  # in bytes, default 10 MB
       ACCEPTED_NETWORKS: "192.168.0.0/16"  # CIDRs that can relay mail
       RECIPIENT_RESTRICTIONS: ""
+      STARTUP_PROBE: "true"  # fail-soft upstream TCP reachability check at startup
 
     ports:
       - "25:25"
 
     volumes:
-      - "/opt/appdata/smtp-relay:/var/spool/postfix"  # persistent mail queue
+      - "/path/to/smtp-relay-spool:/var/spool/postfix"  # persistent mail queue (replace host path)
 ```
 
 ## Configuration reference
@@ -64,14 +66,17 @@ services:
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|
 | `TZ` | Container timezone | `Europe/Paris` | No |
-| `RELAY_HOST` | Upstream SMTP relay hostname; works with any provider (e.g. email-smtp.us-east-1.amazonaws.com for AWS SES, smtp.gmail.com for Gmail, smtp.mailgun.org for Mailgun) | `email-smtp.us-east-1.amazonaws.com` | Yes |
+| `RELAY_HOST` | Upstream SMTP relay hostname; works with any provider (e.g. email-smtp.us-east-1.amazonaws.com for AWS SES, smtp.gmail.com for Gmail, smtp.mailgun.org for Mailgun) | _none_ | Yes |
 | `RELAY_LOGIN` | SASL username for authenticating with the upstream relay | - | Yes |
 | `RELAY_PASSWORD` | SASL password for authenticating with the upstream relay | - | Yes |
 | `RELAY_PORT` | Upstream relay port (587 for STARTTLS, 465 for implicit TLS) | `587` | No |
-| `SMTP_TLS_SECURITY_LEVEL` | Outbound TLS level. Default: secure (TLS required, certificate chain + hostname verification against smtp_tls_CAfile). Also supported: verify (chain only, no hostname match), encrypt (TLS required, no cert verification), dane / dane-only / fingerprint (advanced), may (opportunistic TLS), none (plaintext, credentials exposed). | `secure` | No |
+| `SMTP_TLS_SECURITY_LEVEL` | Outbound TLS level. Default: secure (TLS required, certificate chain + hostname verification against smtp_tls_CAfile). Also supported: verify (chain only, no hostname match), encrypt (TLS required, no cert verification), dane / dane-only / fingerprint (advanced), may (opportunistic TLS), none (plaintext, credentials exposed). Note: `encrypt` gives confidentiality but not peer authentication, so SASL credentials sent under `encrypt` can be captured by an active on-path (MITM) attacker; prefer `secure` (default) or `verify` whenever `RELAY_LOGIN`/`RELAY_PASSWORD` are set. | `secure` | No |
 | `MESSAGE_SIZE_LIMIT` | Maximum message size in bytes (default 10240000 = 10 MB, AWS SES supports up to 40 MB with limit increase) | `10240000` | No |
 | `ACCEPTED_NETWORKS` | Space-separated CIDRs allowed to send mail through this relay (default: 192.168.0.0/16). The entrypoint falls back to all RFC 1918 ranges if unset, but the shipped compose defaults to 192.168.0.0/16. | `192.168.0.0/16` | No |
 | `RECIPIENT_RESTRICTIONS` | Optional recipient filter; space-separated list of allowed email addresses, domains, or regex patterns. If set, only matching recipients are accepted; all others are rejected. Leave empty to allow all recipients. | `` | No |
+| `SMTP_HOSTNAME` | Postfix `myhostname` / HELO identity. FQDN-shaped; rejected if it contains whitespace or shell metacharacters. | `smtp-relay.local` | No |
+| `STARTUP_PROBE` | Run a fail-soft TCP reachability check against the upstream relay at startup. Catches DNS/routing/port/firewall misconfiguration at deploy time; a failure logs a warning and the relay still starts (mail queues). Does not verify SASL credentials or the TLS chain. `true` or `false`. | `true` | No |
+| `STARTUP_PROBE_TIMEOUT` | Timeout in seconds for the startup reachability probe (1-10; kept under the 15s healthcheck start-period so a slow probe never delays readiness). | `5` | No |
 
 ### Volumes
 
@@ -89,6 +94,30 @@ services:
 
 The healthcheck verifies Postfix is accepting connections on port 25 and returning a valid SMTP 220 banner, confirming the relay process is running, the port is bound, and Postfix is ready to accept mail. Postfix runs as PID 1 via `start-fg`; if it dies, the container exits immediately and Docker's `restart: unless-stopped` brings it back — no supervisor or watchdog needed.
 
+## Observability
+
+The healthcheck above only confirms the inbound listener is up; it cannot tell
+you whether mail is actually being delivered upstream (a bad `RELAY_*`
+credential or wrong TLS level only surfaces when a send is attempted). Two
+mechanisms cover that gap:
+
+- **Startup probe** (`STARTUP_PROBE`, on by default) runs a fail-soft TCP
+  reachability check against `RELAY_HOST:RELAY_PORT` at boot and logs the
+  result, so DNS, routing, wrong-port, or firewall misconfiguration shows up in
+  the logs immediately instead of silently deferring mail. It is deliberately a
+  plain TCP connect: it does not verify SASL credentials or the TLS chain, since
+  those are only provable by an actual send.
+- **Delivery logging.** Postfix logs every delivery attempt to stdout with a
+  `status=sent|deferred|bounced` field. In a Loki/Grafana stack, alert on a
+  rising `deferred` rate with no `sent` deliveries; that is the unambiguous
+  "upstream is broken" signal that the startup probe cannot give you. The
+  entrypoint also logs the persisted `queue_active`/`queue_deferred` depth at
+  startup so restarts during an outage are easy to correlate.
+
+Config generation is covered by build-time golden-file tests
+(`tests/render-test.sh`): they render `main.cf` and `recipient_access` across a
+matrix of inputs and fail the image build on any unintended change.
+
 ## Security
 
 **No vulnerabilities found.** Custom code is clean across all
@@ -97,11 +126,11 @@ tools.
 | Tool | Result |
 |------|--------|
 | [shellcheck](https://www.shellcheck.net/) | Clean |
-| [hadolint](https://github.com/hadolint/hadolint) | DL3018 (unpinned apk, accepted) |
+| [hadolint](https://github.com/hadolint/hadolint) | DL3018 (unpinned apk) + DL3002 (root USER) — both accepted by design |
 | [gitleaks](https://github.com/gitleaks/gitleaks) | No secrets detected |
 | [trivy](https://trivy.dev/) | Clean |
 | [grype](https://github.com/anchore/grype) | Clean |
-| [semgrep](https://semgrep.dev/) | 1 info (missing USER, expected) |
+| [semgrep](https://semgrep.dev/) | 5 findings (ifs-tampering — deliberate IFS save/restore idiom, false positives) |
 
 The entrypoint validates all env vars before generating Postfix
 config: newline injection, numeric range, shell metacharacters,
