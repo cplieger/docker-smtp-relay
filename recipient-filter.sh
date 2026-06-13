@@ -21,41 +21,41 @@ build_recipient_filter() {
 	SMTPD_RECIPIENT_RESTRICTIONS="permit_mynetworks, reject"
 
 	if [ -n "$RECIPIENT_RESTRICTIONS" ]; then
-		RCPT_FILE="/etc/postfix/recipient_access"
-		: >"$RCPT_FILE"
-		rule_count=0
-		for entry in $RECIPIENT_RESTRICTIONS; do
-			case "$entry" in
+		_rcpt_file="${CONF_DIR}/recipient_access"
+		: >"$_rcpt_file"
+		_rule_count=0
+		for _entry in $RECIPIENT_RESTRICTIONS; do
+			case "$_entry" in
 			/*/) # already a Postfix regexp literal
-				printf '%s OK\n' "$entry" >>"$RCPT_FILE"
+				printf '%s OK\n' "$_entry" >>"$_rcpt_file"
 				;;
 			*@*) # full address: anchor both ends
-				esc=$(escape_postfix_regex "$entry")
-				printf '/^%s$/ OK\n' "$esc" >>"$RCPT_FILE"
+				_esc=$(escape_postfix_regex "$_entry")
+				printf '/^%s$/ OK\n' "$_esc" >>"$_rcpt_file"
 				;;
 			*) # domain-only: anchor the @-suffix
-				esc=$(escape_postfix_regex "$entry")
-				printf '/@%s$/ OK\n' "$esc" >>"$RCPT_FILE"
+				_esc=$(escape_postfix_regex "$_entry")
+				printf '/@%s$/ OK\n' "$_esc" >>"$_rcpt_file"
 				;;
 			esac
-			rule_count=$((rule_count + 1))
+			_rule_count=$((_rule_count + 1))
 		done
 		# Refuse to proceed if a non-empty RECIPIENT_RESTRICTIONS parses to zero
 		# rules (whitespace-only value from a quoting bug or empty-var expansion).
 		# Without this guard the file ends up containing only `/.*/ REJECT`, Postfix
 		# rejects 100% of mail, and the healthcheck still reports green.
-		if [ "$rule_count" -eq 0 ]; then
+		if [ "$_rule_count" -eq 0 ]; then
 			printf 'level=error msg="RECIPIENT_RESTRICTIONS is non-empty but parsed zero rules (whitespace only?); refusing to reject all mail" value="%s"\n' \
 				"$RECIPIENT_RESTRICTIONS" >&2
-			rm -f "$RCPT_FILE"
+			rm -f "$_rcpt_file"
 			exit 2
 		fi
-		printf '/.*/ REJECT\n' >>"$RCPT_FILE"
+		printf '/.*/ REJECT\n' >>"$_rcpt_file"
 		# shellcheck disable=SC2034 # consumed by caller after sourcing
-		SMTPD_RECIPIENT_RESTRICTIONS="check_recipient_access regexp:${RCPT_FILE}, reject"
+		SMTPD_RECIPIENT_RESTRICTIONS="check_recipient_access regexp:${_rcpt_file}, reject"
 		# Count only operator-supplied allow rules; the trailing /.*/ REJECT terminator
 		# is an internal implementation detail and would confuse operators reading Loki.
 		printf 'level=info msg="recipient filtering configured" rules=%d\n' \
-			"$rule_count" >&2
+			"$_rule_count" >&2
 	fi
 }
