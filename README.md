@@ -1,12 +1,11 @@
 # docker-smtp-relay
 
-[![CI](https://github.com/cplieger/docker-smtp-relay/actions/workflows/ci.yaml/badge.svg)](https://github.com/cplieger/docker-smtp-relay/actions/workflows/ci.yaml)
-[![GitHub release](https://img.shields.io/github/v/release/cplieger/docker-smtp-relay)](https://github.com/cplieger/docker-smtp-relay/releases)
 [![Image Size](https://ghcr-badge.egpl.dev/cplieger/docker-smtp-relay/size)](https://github.com/cplieger/docker-smtp-relay/pkgs/container/smtp-relay)
 ![Platforms](https://img.shields.io/badge/platforms-amd64%20%7C%20arm64-blue)
 ![base: Alpine](https://img.shields.io/badge/base-Alpine-0D597F?logo=alpinelinux)
-[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/cplieger/docker-smtp-relay/badge)](https://scorecard.dev/viewer/?uri=github.com/cplieger/docker-smtp-relay)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/13210/badge)](https://www.bestpractices.dev/projects/13210)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/cplieger/docker-smtp-relay/badge)](https://scorecard.dev/viewer/?uri=github.com/cplieger/docker-smtp-relay)
+[![SBOM](https://img.shields.io/badge/SBOM-SPDX-1D4ED8)](https://github.com/cplieger/docker-smtp-relay/releases)
 
 Point all your services at one container for outbound email — no per-app SMTP setup needed.
 
