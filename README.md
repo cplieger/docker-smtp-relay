@@ -6,6 +6,7 @@
 ![Platforms](https://img.shields.io/badge/platforms-amd64%20%7C%20arm64-blue)
 ![base: Alpine](https://img.shields.io/badge/base-Alpine-0D597F?logo=alpinelinux)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/cplieger/docker-smtp-relay/badge)](https://scorecard.dev/viewer/?uri=github.com/cplieger/docker-smtp-relay)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/13210/badge)](https://www.bestpractices.dev/projects/13210)
 
 Point all your services at one container for outbound email — no per-app SMTP setup needed.
 
