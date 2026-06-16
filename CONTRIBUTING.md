@@ -29,11 +29,12 @@ runs. Three scripts are copied into `/usr/local/bin/` and run as a unit:
 - `recipient-filter.sh` — builds `/etc/postfix/recipient_access` and sets
   `SMTPD_RECIPIENT_RESTRICTIONS` from `RECIPIENT_RESTRICTIONS`.
 
-Validation is data-driven: `VALIDATION_SPEC` in `entrypoint.sh` maps each
+Validation is data-driven: `_spec_table` in `entrypoint.sh` maps each
 env var to a comma-separated list of checks (`nl`, `num`, `meta`,
-`range=MIN:MAX`). Add a new validated variable by extending that table
-and the `case` that resolves its value — not by hand-writing another
-`if` block. Field-specific checks that don't fit the table
+`range=MIN:MAX`). Add a new validated variable by extending that table —
+the loop resolves each row's value indirectly from the named variable, so
+the name lives in exactly one place (no per-var `case` to keep in sync, and
+no hand-written `if` block). Field-specific checks that don't fit the table
 (`validate_sasl_login`, `validate_tls_level`, open-relay rejection) run
 explicitly after the table loop.
 
