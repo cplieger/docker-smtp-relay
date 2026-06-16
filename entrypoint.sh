@@ -102,22 +102,23 @@ STARTUP_PROBE_TIMEOUT:nl,num,range=1:10
 	for _spec in $_spec_table; do
 		_var="${_spec%%:*}"
 		_checks="${_spec#*:}"
-		case "$_var" in
-		RELAY_HOST) _value="$RELAY_HOST" ;;
-		RELAY_PORT) _value="$RELAY_PORT" ;;
-		RELAY_LOGIN) _value="$RELAY_LOGIN" ;;
-		RELAY_PASSWORD) _value="$RELAY_PASSWORD" ;;
-		ACCEPTED_NETWORKS) _value="$ACCEPTED_NETWORKS" ;;
-		RECIPIENT_RESTRICTIONS) _value="$RECIPIENT_RESTRICTIONS" ;;
-		SMTP_TLS_SECURITY_LEVEL) _value="$SMTP_TLS_SECURITY_LEVEL" ;;
-		MESSAGE_SIZE_LIMIT) _value="$MESSAGE_SIZE_LIMIT" ;;
-		SMTP_HOSTNAME) _value="$SMTP_HOSTNAME" ;;
-		STARTUP_PROBE_TIMEOUT) _value="$STARTUP_PROBE_TIMEOUT" ;;
-		*)
+		# A spec row names its env var exactly once; the value is fetched
+		# indirectly so the name lives in one place ($_spec_table) instead of
+		# being duplicated in a per-var case. apply_defaults sets every var in
+		# the table, so an unset name here is a spec-table typo — surface it the
+		# way the old `*)` arm did (exit 2) rather than letting `set -u` abort
+		# with a vaguer message. `${var+x}` is unset-safe (yields empty, never
+		# trips `set -u`); the eval is needed only for the indirect name.
+		if ! eval "[ \"\${${_var}+x}\" = x ]"; then
 			printf 'level=error msg="unknown validation var" var=%s\n' "$_var" >&2
 			exit 2
-			;;
-		esac
+		fi
+		# eval is confined to this bare parameter expansion; $_value is then run
+		# through the same newline/metacharacter checks as before, so no
+		# unsanitized value ever reaches a command. The empty seed makes the
+		# indirect assignment visible to ShellCheck (SC2154).
+		_value=''
+		eval "_value=\${$_var}"
 		_oldIFS=$IFS
 		IFS=,
 		for _chk in $_checks; do
