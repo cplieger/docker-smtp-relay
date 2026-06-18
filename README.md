@@ -63,31 +63,31 @@ services:
 
 ### Environment variables
 
-| Variable | Description | Default | Required |
-|----------|-------------|---------|----------|
-| `TZ` | Container timezone | `Europe/Paris` | No |
-| `RELAY_HOST` | Upstream SMTP relay hostname; works with any provider (e.g. email-smtp.us-east-1.amazonaws.com for AWS SES, smtp.gmail.com for Gmail, smtp.mailgun.org for Mailgun) | _none_ | Yes |
-| `RELAY_LOGIN` | SASL username for authenticating with the upstream relay | - | Yes |
-| `RELAY_PASSWORD` | SASL password for authenticating with the upstream relay | - | Yes |
-| `RELAY_PORT` | Upstream relay port (587 for STARTTLS, 465 for implicit TLS) | `587` | No |
-| `SMTP_TLS_SECURITY_LEVEL` | Outbound TLS level. Default: secure (TLS required, certificate chain + hostname verification against smtp_tls_CAfile). Also supported: verify (chain only, no hostname match), encrypt (TLS required, no cert verification), dane / dane-only / fingerprint (advanced), may (opportunistic TLS), none (plaintext, credentials exposed). Note: `encrypt` gives confidentiality but not peer authentication, so SASL credentials sent under `encrypt` can be captured by an active on-path (MITM) attacker; prefer `secure` (default) or `verify` whenever `RELAY_LOGIN`/`RELAY_PASSWORD` are set. | `secure` | No |
-| `MESSAGE_SIZE_LIMIT` | Maximum message size in bytes (default 10240000 = 10 MB, AWS SES supports up to 40 MB with limit increase) | `10240000` | No |
-| `ACCEPTED_NETWORKS` | Space-separated CIDRs allowed to send mail through this relay (default: 192.168.0.0/16). The entrypoint falls back to all RFC 1918 ranges if unset, but the shipped compose defaults to 192.168.0.0/16. | `192.168.0.0/16` | No |
-| `RECIPIENT_RESTRICTIONS` | Optional recipient filter; space-separated list of allowed email addresses, domains, or regex patterns. If set, only matching recipients are accepted; all others are rejected. Leave empty to allow all recipients. | `` | No |
-| `SMTP_HOSTNAME` | Postfix `myhostname` / HELO identity. FQDN-shaped; rejected if it contains whitespace or shell metacharacters. | `smtp-relay.local` | No |
-| `STARTUP_PROBE` | Run a fail-soft TCP reachability check against the upstream relay at startup. Catches DNS/routing/port/firewall misconfiguration at deploy time; a failure logs a warning and the relay still starts (mail queues). Does not verify SASL credentials or the TLS chain. `true` or `false`. | `true` | No |
-| `STARTUP_PROBE_TIMEOUT` | Timeout in seconds for the startup reachability probe (1-10; kept under the 15s healthcheck start-period so a slow probe never delays readiness). | `5` | No |
+| Variable                  | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Default            | Required |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------ | -------- |
+| `TZ`                      | Container timezone                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | `Europe/Paris`     | No       |
+| `RELAY_HOST`              | Upstream SMTP relay hostname; works with any provider (e.g. email-smtp.us-east-1.amazonaws.com for AWS SES, smtp.gmail.com for Gmail, smtp.mailgun.org for Mailgun)                                                                                                                                                                                                                                                                                                                                                                                                                              | _none_             | Yes      |
+| `RELAY_LOGIN`             | SASL username for authenticating with the upstream relay                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | -                  | Yes      |
+| `RELAY_PASSWORD`          | SASL password for authenticating with the upstream relay                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | -                  | Yes      |
+| `RELAY_PORT`              | Upstream relay port (587 for STARTTLS, 465 for implicit TLS)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | `587`              | No       |
+| `SMTP_TLS_SECURITY_LEVEL` | Outbound TLS level. Default: secure (TLS required, certificate chain + hostname verification against smtp_tls_CAfile). Also supported: verify (chain only, no hostname match), encrypt (TLS required, no cert verification), dane / dane-only / fingerprint (advanced), may (opportunistic TLS), none (plaintext, credentials exposed). Note: `encrypt` gives confidentiality but not peer authentication, so SASL credentials sent under `encrypt` can be captured by an active on-path (MITM) attacker; prefer `secure` (default) or `verify` whenever `RELAY_LOGIN`/`RELAY_PASSWORD` are set. | `secure`           | No       |
+| `MESSAGE_SIZE_LIMIT`      | Maximum message size in bytes (default 10240000 = 10 MB, AWS SES supports up to 40 MB with limit increase)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | `10240000`         | No       |
+| `ACCEPTED_NETWORKS`       | Space-separated CIDRs allowed to send mail through this relay (default: 192.168.0.0/16). The entrypoint falls back to all RFC 1918 ranges if unset, but the shipped compose defaults to 192.168.0.0/16.                                                                                                                                                                                                                                                                                                                                                                                          | `192.168.0.0/16`   | No       |
+| `RECIPIENT_RESTRICTIONS`  | Optional recipient filter; space-separated list of allowed email addresses, domains, or regex patterns. If set, only matching recipients are accepted; all others are rejected. Leave empty to allow all recipients.                                                                                                                                                                                                                                                                                                                                                                             | ``                 | No       |
+| `SMTP_HOSTNAME`           | Postfix `myhostname` / HELO identity. FQDN-shaped; rejected if it contains whitespace or shell metacharacters.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | `smtp-relay.local` | No       |
+| `STARTUP_PROBE`           | Run a fail-soft TCP reachability check against the upstream relay at startup. Catches DNS/routing/port/firewall misconfiguration at deploy time; a failure logs a warning and the relay still starts (mail queues). Does not verify SASL credentials or the TLS chain. `true` or `false`.                                                                                                                                                                                                                                                                                                        | `true`             | No       |
+| `STARTUP_PROBE_TIMEOUT`   | Timeout in seconds for the startup reachability probe (1-10; kept under the 15s healthcheck start-period so a slow probe never delays readiness).                                                                                                                                                                                                                                                                                                                                                                                                                                                | `5`                | No       |
 
 ### Volumes
 
-| Mount | Description |
-|-------|-------------|
+| Mount                | Description                           |
+| -------------------- | ------------------------------------- |
 | `/var/spool/postfix` | Postfix mail spool (persistent queue) |
 
 ### Ports
 
-| Port | Description |
-|------|-------------|
+| Port | Description                                  |
+| ---- | -------------------------------------------- |
 | `25` | SMTP relay (accepts mail from local network) |
 
 ## Healthcheck
@@ -123,14 +123,14 @@ matrix of inputs and fail the image build on any unintended change.
 **No vulnerabilities found.** Custom code is clean across all
 tools.
 
-| Tool | Result |
-|------|--------|
-| [shellcheck](https://www.shellcheck.net/) | Clean |
-| [hadolint](https://github.com/hadolint/hadolint) | DL3018 (unpinned apk) + DL3002 (root USER) — both accepted by design |
-| [gitleaks](https://github.com/gitleaks/gitleaks) | No secrets detected |
-| [trivy](https://trivy.dev/) | Clean |
-| [grype](https://github.com/anchore/grype) | Clean |
-| [semgrep](https://semgrep.dev/) | 5 findings (ifs-tampering — deliberate IFS save/restore idiom, false positives) |
+| Tool                                             | Result                                                                          |
+| ------------------------------------------------ | ------------------------------------------------------------------------------- |
+| [shellcheck](https://www.shellcheck.net/)        | Clean                                                                           |
+| [hadolint](https://github.com/hadolint/hadolint) | DL3018 (unpinned apk) + DL3002 (root USER) — both accepted by design            |
+| [gitleaks](https://github.com/gitleaks/gitleaks) | No secrets detected                                                             |
+| [trivy](https://trivy.dev/)                      | Clean                                                                           |
+| [grype](https://github.com/anchore/grype)        | Clean                                                                           |
+| [semgrep](https://semgrep.dev/)                  | 5 findings (ifs-tampering — deliberate IFS save/restore idiom, false positives) |
 
 The entrypoint validates all env vars before generating Postfix
 config: newline injection, numeric range, shell metacharacters,
@@ -153,9 +153,9 @@ signal handling.
 
 All dependencies are updated automatically via [Renovate](https://github.com/renovatebot/renovate) and pinned by digest or version for reproducibility.
 
-| Dependency | Source |
-|------------|--------|
-| alpine | [Alpine](https://hub.docker.com/_/alpine) |
+| Dependency | Source                                    |
+| ---------- | ----------------------------------------- |
+| alpine     | [Alpine](https://hub.docker.com/_/alpine) |
 
 ## Credits
 
