@@ -30,9 +30,7 @@ RUN ENTRYPOINT_DIR=/usr/local/bin sh /tmp/tests/render-test.sh \
 # ---------------------------------------------------------------------------
 FROM base AS final
 
-COPY --chmod=755 validate.sh /usr/local/bin/validate.sh
-COPY --chmod=755 recipient-filter.sh /usr/local/bin/recipient-filter.sh
-COPY --chmod=755 entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY --chmod=755 validate.sh recipient-filter.sh entrypoint.sh /usr/local/bin/
 
 # Pull a 0-byte marker from the test stage so building `final` forces the
 # build-time golden tests to run and pass first. The marker is the only thing

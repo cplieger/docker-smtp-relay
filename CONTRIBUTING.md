@@ -82,10 +82,11 @@ The build runs the same harness in a dedicated `test` stage (the final image
 produced); the centralized `ci / validate` Docker build-gate therefore runs
 them too.
 
-The entrypoint validators additionally mirror a shared reference library (see
-the `validate.sh` header note, "Keep in sync with `lib/shell/validate.sh`")
-whose own test suite runs in CI. If you change a validator here, port the same
-change to that library so the two stay aligned.
+The validators live entirely in this repo's `validate.sh`; there is no shared
+validation library (the former `lib/shell/validate.sh` was removed and
+`validate.sh` is now the canonical copy). When you change a validator, update
+the golden fixtures under `tests/` that exercise it and re-run
+`sh tests/render-test.sh` -- there is no second copy to keep in sync.
 
 ## Conventions and gotchas
 

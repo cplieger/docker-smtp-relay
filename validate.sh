@@ -52,7 +52,7 @@ validate_no_metacharacters() {
 # Usage: validate_range VAR_NAME VALUE MIN MAX
 validate_range() {
 	if [ "$2" -lt "$3" ] || [ "$2" -gt "$4" ]; then
-		printf 'level=error msg="%s out of range (%s-%s)" value=%s\n' "$1" "$3" "$4" "$2" >&2
+		printf 'level=error msg="env var out of range" var=%s value="%s" min=%s max=%s\n' "$1" "$2" "$3" "$4" >&2
 		return 1
 	fi
 }
@@ -81,9 +81,11 @@ validate_no_open_relay() {
 			return 1
 		fi
 
-		# IP shape validation: catch typos like 192.68.1.0/24 (missing digit)
-		# that would silently exclude the intended LAN from relaying. IPv4
-		# requires four dotted octets each 0-255. IPv6 is detected by `:`
+		# IP shape validation: reject malformed entries the operator would not
+		# notice -- wrong octet count (192.168.1/24), out-of-range octets
+		# (192.168.1.300/24), or non-numeric octets -- that would silently exclude
+		# the intended LAN from relaying. IPv4 requires four dotted octets each
+		# 0-255. IPv6 is detected by `:`
 		# and delegated to Postfix for per-group validation.
 		_ip="${_net%/*}"
 		case "$_ip" in

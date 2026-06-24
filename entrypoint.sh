@@ -73,9 +73,9 @@ apply_defaults() {
 	: "${SMTP_TLS_SECURITY_LEVEL:=secure}"
 	: "${MESSAGE_SIZE_LIMIT:=10240000}"
 	# Use an FQDN-shaped default so Postfix does not emit `numeric hostname`
-	# warnings and receiving MTAs that validate HELO accept the relay. The
-	# compose service sets `hostname: smtp-relay.local` to keep container +
-	# Postfix identity aligned.
+	# warnings and receiving MTAs that validate HELO accept the relay. Set a
+	# matching `hostname: smtp-relay.local` on the compose service to keep the
+	# container and Postfix identity aligned.
 	: "${SMTP_HOSTNAME:=smtp-relay.local}"
 	: "${STARTUP_PROBE:=true}"
 	: "${STARTUP_PROBE_TIMEOUT:=5}"
@@ -288,8 +288,11 @@ write_sasl_secret() {
 
 	# Write credentials with restrictive permissions from the start (umask 077
 	# in subshell avoids a brief world-readable window before chmod).
-	(umask 077 && printf '%s %s:%s\n' "$RELAYHOST_VALUE" "$RELAY_LOGIN" "$RELAY_PASSWORD" \
-		>"$SASL_PASSWD_FILE")
+	if ! (umask 077 && printf '%s %s:%s\n' "$RELAYHOST_VALUE" "$RELAY_LOGIN" "$RELAY_PASSWORD" \
+		>"$SASL_PASSWD_FILE"); then
+		printf 'level=error msg="failed to write SASL credentials file" path=%s\n' "$SASL_PASSWD_FILE" >&2
+		exit 1
+	fi
 	# postmap inherits the process umask, not the source file mode; run it
 	# inside a restrictive umask so the .db file is also 0600.
 	if ! (umask 077 && postmap "$SASL_PASSWD_FILE"); then
