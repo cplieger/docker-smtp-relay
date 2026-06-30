@@ -1,3 +1,4 @@
+# Example compose for docker-smtp-relay. See the README for all configuration options and hardening.
 services:
   smtp-relay:
     image: ghcr.io/cplieger/docker-smtp-relay:latest
@@ -10,11 +11,7 @@ services:
       RELAY_LOGIN: "your-relay-login"
       RELAY_PASSWORD: "your-relay-password"
       RELAY_PORT: "587"  # 587 = STARTTLS, 465 = implicit TLS
-      SMTP_TLS_SECURITY_LEVEL: "secure"  # secure (default), verify, encrypt, may, or none
-      MESSAGE_SIZE_LIMIT: "10240000"  # in bytes, default 10 MB
       ACCEPTED_NETWORKS: "192.168.0.0/16"  # CIDRs that can relay mail
-      RECIPIENT_RESTRICTIONS: ""
-      STARTUP_PROBE: "true"  # fail-soft TCP reachability check on the upstream relay at startup
 
     ports:
       - "25:25"
