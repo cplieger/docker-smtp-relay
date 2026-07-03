@@ -83,10 +83,9 @@ produced); the centralized `ci / validate` Docker build-gate therefore runs
 them too.
 
 The validators live entirely in this repo's `validate.sh`; there is no shared
-validation library (the former `lib/shell/validate.sh` was removed and
-`validate.sh` is now the canonical copy). When you change a validator, update
-the golden fixtures under `tests/` that exercise it and re-run
-`sh tests/render-test.sh` -- there is no second copy to keep in sync.
+validation library. When you change a validator, update the golden fixtures
+under `tests/` that exercise it and re-run `sh tests/render-test.sh` -- there is
+no second copy to keep in sync.
 
 ## Conventions and gotchas
 
