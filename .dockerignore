@@ -1,0 +1,7 @@
+*
+!Dockerfile
+!entrypoint.sh
+!validate.sh
+!recipient-filter.sh
+!tests/
+!tests/**

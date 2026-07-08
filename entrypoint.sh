@@ -172,7 +172,7 @@ STARTUP_PROBE_TIMEOUT:nl,num,range=1:10
 
   # Reject cleartext TLS when SASL credentials are configured — sending
   # passwords over an unencrypted channel is a credential leak.
-  if [ -n "$RELAY_LOGIN" ] && [ -n "$RELAY_PASSWORD" ]; then
+  if sasl_enabled; then
     case "$SMTP_TLS_SECURITY_LEVEL" in
       none | may)
         printf 'level=error msg="TLS must be encrypt or stronger when SASL credentials are set" tls_level=%s\n' \
@@ -208,6 +208,15 @@ compute_relayhost() {
 }
 
 # ---------------------------------------------------------------------------
+# sasl_enabled — true when both SASL credentials are configured (the single
+# source of truth for "SASL is on"). Keeps the cleartext-TLS guard in
+# validate_config and the RELAY_AUTH_ENABLE derivation below in lockstep.
+# ---------------------------------------------------------------------------
+sasl_enabled() {
+  [ -n "$RELAY_LOGIN" ] && [ -n "$RELAY_PASSWORD" ]
+}
+
+# ---------------------------------------------------------------------------
 # compute_sasl_state — derive the SASL-related main.cf values from whether
 # credentials are present. Pure: writes no secret to disk, so it is safe in
 # render mode. The actual sasl_passwd .db is written by write_sasl_secret.
@@ -216,7 +225,7 @@ compute_sasl_state() {
   # SASL_MAPS_LINE is the full main.cf line so the disabled case renders
   # `smtp_sasl_password_maps =` without a trailing space (Postfix reads an
   # empty value as "no map"; a templated empty var would leave whitespace).
-  if [ -n "$RELAY_LOGIN" ] && [ -n "$RELAY_PASSWORD" ]; then
+  if sasl_enabled; then
     RELAY_AUTH_ENABLE="yes"
     SASL_MAPS_LINE="smtp_sasl_password_maps = hash:${SASL_PASSWD_FILE}"
   else
@@ -373,7 +382,12 @@ probe_upstream() {
   _probe_host="${RELAY_HOST#\[}"
   _probe_host="${_probe_host%\]}"
 
-  if printf 'QUIT\r\n' | timeout "$STARTUP_PROBE_TIMEOUT" nc -w "$STARTUP_PROBE_TIMEOUT" "$_probe_host" "$RELAY_PORT" >/dev/null 2>&1; then
+  # The outer timeout gets a small margin over nc's own -w idle timeout so
+  # that for an implicit-TLS upstream (465, no plaintext greeting) nc's own
+  # idle-close (success) wins the race instead of being SIGTERM-killed (a
+  # spurious "unreachable" warn). Total stays bounded under the 15s
+  # healthcheck start-period (max 10 + 2 = 12s).
+  if printf 'QUIT\r\n' | timeout "$((STARTUP_PROBE_TIMEOUT + 2))" nc -w "$STARTUP_PROBE_TIMEOUT" "$_probe_host" "$RELAY_PORT" >/dev/null 2>&1; then
     printf 'level=info msg="upstream relay reachable" relay=%s\n' "$RELAYHOST_VALUE" >&2
   else
     printf 'level=warn msg="upstream relay unreachable at startup; continuing (mail will queue)" relay=%s\n' \
