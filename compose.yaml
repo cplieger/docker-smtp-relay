@@ -6,7 +6,6 @@ services:
     restart: unless-stopped
 
     environment:
-      TZ: "Europe/Paris"
       RELAY_HOST: "email-smtp.us-east-1.amazonaws.com"  # any SMTP provider hostname
       RELAY_LOGIN: "your-relay-login"
       RELAY_PASSWORD: "your-relay-password"

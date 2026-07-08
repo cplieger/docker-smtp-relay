@@ -124,7 +124,8 @@ no second copy to keep in sync.
   must never block startup: a failure logs a warning and returns 0 so mail
   still queues. Keep it bounded by `STARTUP_PROBE_TIMEOUT` (under the
   healthcheck `--start-period`) and never make it attempt SASL AUTH.
-- Match the existing tab indentation in the shell scripts.
+- Match the existing 2-space indentation in the shell scripts
+  (`shfmt -i 2 -ci`, matching `.editorconfig`).
 
 ## Commits and PRs
 
