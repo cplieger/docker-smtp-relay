@@ -57,6 +57,46 @@ validate_range() {
   fi
 }
 
+validate_ipv6_cidr() {
+  _net=$1
+  _prefix=$2
+  if [ "$_prefix" -gt 128 ]; then
+    printf 'level=error msg="IPv6 prefix out of range" network=%s prefix=%s\n' "$_net" "$_prefix" >&2
+    return 1
+  fi
+}
+
+validate_ipv4_cidr() {
+  _net=$1
+  _ip=$2
+  _prefix=$3
+  if [ "$_prefix" -gt 32 ]; then
+    printf 'level=error msg="IPv4 prefix out of range" network=%s prefix=%s\n' "$_net" "$_prefix" >&2
+    return 1
+  fi
+  _oldIFS=$IFS
+  IFS=.
+  # shellcheck disable=SC2086
+  set -- $_ip
+  IFS=$_oldIFS
+  if [ $# -ne 4 ]; then
+    printf 'level=error msg="IPv4 address must have 4 octets" network=%s\n' "$_net" >&2
+    return 1
+  fi
+  for _oct; do
+    case "$_oct" in
+      '' | *[!0-9]*)
+        printf 'level=error msg="IPv4 octet not numeric" network=%s octet="%s"\n' "$_net" "$_oct" >&2
+        return 1
+        ;;
+    esac
+    if [ "$_oct" -gt 255 ]; then
+      printf 'level=error msg="IPv4 octet out of range" network=%s octet=%s\n' "$_net" "$_oct" >&2
+      return 1
+    fi
+  done
+}
+
 validate_no_open_relay() {
   for _net in $1; do
     case "$_net" in
@@ -89,39 +129,8 @@ validate_no_open_relay() {
     # and delegated to Postfix for per-group validation.
     _ip="${_net%/*}"
     case "$_ip" in
-      *:*)
-        if [ "$_prefix" -gt 128 ]; then
-          printf 'level=error msg="IPv6 prefix out of range" network=%s prefix=%s\n' "$_net" "$_prefix" >&2
-          return 1
-        fi
-        ;;
-      *.*.*.*)
-        if [ "$_prefix" -gt 32 ]; then
-          printf 'level=error msg="IPv4 prefix out of range" network=%s prefix=%s\n' "$_net" "$_prefix" >&2
-          return 1
-        fi
-        _oldIFS=$IFS
-        IFS=.
-        # shellcheck disable=SC2086
-        set -- $_ip
-        IFS=$_oldIFS
-        if [ $# -ne 4 ]; then
-          printf 'level=error msg="IPv4 address must have 4 octets" network=%s\n' "$_net" >&2
-          return 1
-        fi
-        for _oct; do
-          case "$_oct" in
-            '' | *[!0-9]*)
-              printf 'level=error msg="IPv4 octet not numeric" network=%s octet="%s"\n' "$_net" "$_oct" >&2
-              return 1
-              ;;
-          esac
-          if [ "$_oct" -gt 255 ]; then
-            printf 'level=error msg="IPv4 octet out of range" network=%s octet=%s\n' "$_net" "$_oct" >&2
-            return 1
-          fi
-        done
-        ;;
+      *:*) validate_ipv6_cidr "$_net" "$_prefix" || return 1 ;;
+      *.*.*.*) validate_ipv4_cidr "$_net" "$_ip" "$_prefix" || return 1 ;;
       *)
         printf 'level=error msg="unrecognized network format" network=%s\n' "$_net" >&2
         return 1
