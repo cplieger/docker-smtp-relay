@@ -41,7 +41,6 @@ services:
       - "no-new-privileges:true"  # block post-compromise setuid escalation
 
     environment:
-      TZ: "Europe/Paris"
       RELAY_HOST: "email-smtp.us-east-1.amazonaws.com"  # any SMTP provider hostname
       RELAY_LOGIN: "your-relay-login"
       RELAY_PASSWORD: "your-relay-password"
@@ -65,7 +64,7 @@ services:
 
 | Variable                  | Description                                                                                                                                                                                                                                                                                                                                       | Default            | Required |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ | -------- |
-| `TZ`                      | Container timezone                                                                                                                                                                                                                                                                                                                                | `Europe/Paris`     | No       |
+| `TZ`                      | Not configurable. The image omits `tzdata`, so all logs (Postfix maillog + the entrypoint's structured logs) are emitted in UTC — a single UTC timeline for Loki/Grafana ingestion. Setting `TZ` has no effect.                                                                                                                                   | `UTC`              | No       |
 | `RELAY_HOST`              | Upstream SMTP relay hostname; works with any provider (e.g. email-smtp.us-east-1.amazonaws.com for AWS SES, smtp.gmail.com for Gmail, smtp.mailgun.org for Mailgun)                                                                                                                                                                               | _none_             | Yes      |
 | `RELAY_LOGIN`             | SASL username for the upstream relay. Optional, but must be set together with RELAY_PASSWORD (set neither to relay without SASL, e.g. to an IP-authenticated smarthost). Most hosted providers (SES, Gmail, Mailgun) require both.                                                                                                                | -                  | No       |
 | `RELAY_PASSWORD`          | SASL password for the upstream relay. Optional; see RELAY_LOGIN (both-or-neither).                                                                                                                                                                                                                                                                | -                  | No       |

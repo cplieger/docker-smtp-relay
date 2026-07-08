@@ -9,8 +9,7 @@ RUN apk upgrade --no-cache \
         ca-certificates \
         cyrus-sasl \
         cyrus-sasl-login \
-        postfix \
-        tzdata
+        postfix
 
 # ---------------------------------------------------------------------------
 # Test stage — runs the golden-file config-generation tests at build time.
