@@ -113,6 +113,48 @@ mechanisms cover that gap:
   entrypoint also logs the persisted `queue_active`/`queue_deferred` depth at
   startup so restarts during an outage are easy to correlate.
 
+## Alerting
+
+docker-smtp-relay has no metrics endpoint; its delivery state is in its logs.
+Postfix writes every delivery attempt to the container log with a `status=sent`,
+`status=deferred`, or `status=bounced` field (see [Observability](#observability)).
+Ship the container's logs to Loki (Grafana Alloy's Docker log discovery does
+this with no configuration) and evaluate this rule with
+[Loki's ruler](https://grafana.com/docs/loki/latest/alert/); firing alerts
+deliver through your Alertmanager exactly like Prometheus metric alerts.
+
+```yaml
+groups:
+  - name: smtp-relay
+    rules:
+      - alert: SmtpRelayDeliveryFailing
+        expr: |
+          sum by (container) (count_over_time(
+            {container="smtp-relay"} |~ `status=(deferred|bounced)` [15m]
+          )) > 10
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "smtp-relay is failing to deliver mail upstream"
+          description: >
+            More than 10 delivery attempts logged status=deferred or
+            status=bounced in the last 15m, so outbound mail is not reaching the
+            upstream relay. Common causes are a bad RELAY_LOGIN / RELAY_PASSWORD,
+            a wrong SMTP_TLS_SECURITY_LEVEL, or the provider rejecting or
+            throttling the sender. Mail keeps queuing and retrying meanwhile;
+            check the delivery lines for the SMTP reply text.
+```
+
+The threshold and the `severity` label are starting points; tune the count to
+your mail volume and adjust the `container` selector (or `job` / `service`,
+depending on your log collector) to your deployment, then route by whatever
+labels your Alertmanager uses. No deadman is shipped: delivery lines appear only
+when mail is sent, so quiet periods are normal and the container healthcheck
+already covers the dead-process case. The deferred and delivered counts can
+alternatively be extracted into Prometheus metrics with an Alloy `loki.process`
+`stage.metrics` block for dashboards, but this log-based rule needs no such setup.
+
 ## Security
 
 **No vulnerabilities found.** Custom code is clean across all
