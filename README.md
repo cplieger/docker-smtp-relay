@@ -186,11 +186,15 @@ escaped regex patterns.
 
 ## Dependencies
 
-All dependencies are updated automatically via [Renovate](https://github.com/renovatebot/renovate) and pinned by digest or version for reproducibility.
+All dependencies are updated automatically via [Renovate](https://github.com/renovatebot/renovate). The base image is pinned by SHA digest, and Postfix is pinned by version + SHA-256 and built from the upstream source tarball with feature parity to the Alpine `postfix` package (TLS, Cyrus SASL client auth, PCRE2, LMDB as the default map type, SMTPUTF8). The SASL runtime packages and shared libraries are installed unpinned so they track the digest-pinned base userland.
 
-| Dependency | Source                                    |
-| ---------- | ----------------------------------------- |
-| alpine     | [Alpine](https://hub.docker.com/_/alpine) |
+| Dependency                    | Source                                                          |
+| ----------------------------- | --------------------------------------------------------------- |
+| alpine                        | [Alpine](https://hub.docker.com/_/alpine)                       |
+| postfix                       | [GitHub](https://github.com/vdukhovni/postfix)                  |
+| cyrus-sasl / cyrus-sasl-login | [Alpine](https://pkgs.alpinelinux.org/packages?name=cyrus-sasl) |
+
+Postfix version bumps arrive as Renovate PRs; each bump needs a one-command `POSTFIX_SHA256` refresh (the command is embedded in the Dockerfile comment and the PR body). Before merging a major or minor Postfix upgrade (e.g. 3.11 to 3.12), check the [upstream announcements](https://www.postfix.org/announcements.html) for behavior changes: the entrypoint pins `compatibility_level = 3.6`, so new upstream defaults are adopted deliberately rather than silently.
 
 ## Credits
 
