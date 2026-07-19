@@ -23,6 +23,12 @@ smtp_tls_mandatory_ciphers = high
 smtp_tls_ciphers = high
 
 message_size_limit = 10240000
+# Postfix requires mailbox_size_limit >= message_size_limit. With the Postfix
+# default (51200000) a larger MESSAGE_SIZE_LIMIT makes the local(8) delivery
+# agent fatal on mail addressed to $mydestination (verified by live repro);
+# relayed mail is unaffected. Track the message limit so the whole validated
+# 1-100 MB range works on every delivery path.
+mailbox_size_limit = 10240000
 
 smtpd_relay_restrictions = permit_mynetworks, reject
 smtpd_recipient_restrictions = permit_mynetworks, reject
