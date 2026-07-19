@@ -15,8 +15,9 @@ ARG POSTFIX_SHA256=4a6ab3d0e9390989fa201fc6c446045fc702c4e16e7a247c3ae261c9e9bee
 
 # ---------------------------------------------------------------------------
 # Builder stage - compiles Postfix from the pinned upstream source tarball
-# (fetched from the same release mirror Alpine's own package builds use,
-# SHA256-verified fail-closed) with feature parity to Alpine 3.24's
+# (fetched from the release mirror Alpine's own package builds use, falling
+# back to the upstream origin server on a mirror outage, SHA256-verified
+# fail-closed either way) with feature parity to Alpine 3.24's
 # main/postfix package, mirroring its APKBUILD makedefs selections: TLS
 # (openssl), Cyrus SASL client auth, PCRE2, LMDB as the default database type
 # with Berkeley DB disabled (hash:/btree: maps transparently use LMDB - see
@@ -70,9 +71,17 @@ WORKDIR /build/postfix
 # The single-quoted `$CONFIG_DIRECTORY` in the postfix-install sed is meant
 # literally (postfix-install expands it at install time, not this shell), so
 # SC2016 is a false positive here.
+# The tarball is fetched from the primary mirror (high5.nl, the release
+# mirror Alpine's own package builds use) with the upstream origin server
+# (ftp.porcupine.org, plain HTTP — integrity comes from the SHA256 pin, not
+# the transport) as fallback, so a single-mirror outage cannot block builds.
+# -O pins the output name on both attempts so a partial file from a failed
+# primary fetch is truncated by the fallback instead of being saved aside.
 # hadolint ignore=SC2016
-RUN wget -q --tries=3 --timeout=30 \
+RUN { wget -q --tries=3 --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz" \
         "https://high5.nl/mirrors/postfix-release/official/postfix-${POSTFIX_VERSION#v}.tar.gz" \
+      || wget -q --tries=3 --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz" \
+        "http://ftp.porcupine.org/mirrors/postfix-release/official/postfix-${POSTFIX_VERSION#v}.tar.gz"; } \
     && echo "${POSTFIX_SHA256}  postfix-${POSTFIX_VERSION#v}.tar.gz" | sha256sum -c - \
     && tar xzf "postfix-${POSTFIX_VERSION#v}.tar.gz" --strip-components=1 --no-same-owner \
     && rm "postfix-${POSTFIX_VERSION#v}.tar.gz" \
