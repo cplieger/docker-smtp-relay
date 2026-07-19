@@ -45,7 +45,7 @@ readonly MAIN_CF="${CONF_DIR}/main.cf"
 # RECIPIENT_RESTRICTIONS   string    ""                   space-separated; addresses or /regex/
 # SMTP_TLS_SECURITY_LEVEL  enum      secure               one of $TLS_LEVELS (see validate.sh)
 # MESSAGE_SIZE_LIMIT       integer   10240000             max 104857600 (100 MB)
-# SMTP_HOSTNAME            string    smtp-relay.local     FQDN-shaped; no newlines/metacharacters
+# SMTP_HOSTNAME            string    smtp-relay.local     FQDN recommended (shape not enforced); no newlines/metacharacters
 # STARTUP_PROBE            enum      true                 true|false; fail-soft upstream TCP check
 # STARTUP_PROBE_TIMEOUT    integer   5                    1-10; seconds (kept under healthcheck start-period)
 # ---------------------------------------------------------------------------
@@ -265,6 +265,12 @@ smtp_tls_mandatory_ciphers = high
 smtp_tls_ciphers = high
 
 message_size_limit = ${MESSAGE_SIZE_LIMIT}
+# Postfix requires mailbox_size_limit >= message_size_limit. With the Postfix
+# default (51200000) a larger MESSAGE_SIZE_LIMIT makes the local(8) delivery
+# agent fatal on mail addressed to \$mydestination (verified by live repro);
+# relayed mail is unaffected. Track the message limit so the whole validated
+# 1-100 MB range works on every delivery path.
+mailbox_size_limit = ${MESSAGE_SIZE_LIMIT}
 
 smtpd_relay_restrictions = permit_mynetworks, reject
 smtpd_recipient_restrictions = ${SMTPD_RECIPIENT_RESTRICTIONS}
