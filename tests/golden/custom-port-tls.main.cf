@@ -11,7 +11,8 @@ relayhost = [smtp.example.com]:465
 
 smtp_sasl_auth_enable = no
 smtp_sasl_password_maps =
-smtp_sasl_security_options = noanonymous
+smtp_sasl_security_options = noanonymous, noplaintext
+smtp_sasl_tls_security_options = noanonymous
 smtp_sasl_mechanism_filter = plain, login
 
 smtp_tls_security_level = encrypt

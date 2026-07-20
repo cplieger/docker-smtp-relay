@@ -111,6 +111,10 @@ check_ok recipients \
 check_ok ipv6-relay \
   RELAY_HOST=2001:db8::1
 
+check_ok ipv6-networks \
+  RELAY_HOST=smtp.example.com \
+  "ACCEPTED_NETWORKS=192.168.0.0/16 fd00::/8"
+
 check_ok custom-port-tls \
   RELAY_HOST=smtp.example.com \
   RELAY_PORT=465 \

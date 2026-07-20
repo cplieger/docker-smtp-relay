@@ -38,6 +38,7 @@ readonly MAIN_CF="${CONF_DIR}/main.cf"
 # Env Var                  Type      Default              Constraints
 # -------                  ----      -------              -----------
 # ACCEPTED_NETWORKS        string    192.168.0.0/16 ...   space-separated CIDRs; min /8; no 0.0.0.0/0
+# CONF_DIR                 string    /etc/postfix         no newlines/metacharacters (rendered into main.cf paths)
 # RELAY_HOST               string    (required)           no newlines/metacharacters; non-empty
 # RELAY_PORT               integer   587                  1-65535
 # RELAY_LOGIN              string    ""                   no whitespace or colons
@@ -94,6 +95,7 @@ apply_defaults() {
 # Checks: nl=no_newlines, num=numeric, meta=no_metacharacters, range=MIN:MAX
 validate_config() {
   _spec_table="
+CONF_DIR:nl,meta
 RELAY_HOST:nl,meta
 RELAY_PORT:nl,num,range=1:65535
 RELAY_LOGIN:nl
@@ -208,6 +210,26 @@ compute_relayhost() {
 }
 
 # ---------------------------------------------------------------------------
+# compute_mynetworks — build the mynetworks value Postfix consumes. Postfix
+# requires IPv6 addresses in mynetworks to be bracketed ([fd00::]/8, per
+# postconf(5)); an unbracketed IPv6 CIDR draws a runtime "bad net/mask
+# pattern" warning and never matches, silently denying the operator's IPv6
+# LAN. Bracket bare IPv6 entries here; IPv4 entries pass through verbatim, so
+# output is byte-identical for IPv4-only inputs. validate_no_open_relay has
+# already guaranteed every entry carries a /prefix.
+# ---------------------------------------------------------------------------
+compute_mynetworks() {
+  MYNETWORKS_VALUE="127.0.0.0/8 [::1]/128"
+  for _net in $ACCEPTED_NETWORKS; do
+    case "$_net" in
+      \[*) ;;                                 # already bracketed IPv6 - Postfix format
+      *:*) _net="[${_net%/*}]/${_net##*/}" ;; # bare IPv6: bracket address for mynetworks
+    esac
+    MYNETWORKS_VALUE="$MYNETWORKS_VALUE $_net"
+  done
+}
+
+# ---------------------------------------------------------------------------
 # sasl_enabled — true when both SASL credentials are configured (the single
 # source of truth for "SASL is on"). Keeps the cleartext-TLS guard in
 # validate_config and the RELAY_AUTH_ENABLE derivation below in lockstep.
@@ -246,14 +268,15 @@ compatibility_level = 3.6
 
 myhostname = ${SMTP_HOSTNAME}
 mydestination = localhost
-mynetworks = 127.0.0.0/8 [::1]/128 ${ACCEPTED_NETWORKS}
+mynetworks = ${MYNETWORKS_VALUE}
 inet_interfaces = all
 
 relayhost = ${RELAYHOST_VALUE}
 
 smtp_sasl_auth_enable = ${RELAY_AUTH_ENABLE}
 ${SASL_MAPS_LINE}
-smtp_sasl_security_options = noanonymous
+smtp_sasl_security_options = noanonymous, noplaintext
+smtp_sasl_tls_security_options = noanonymous
 smtp_sasl_mechanism_filter = plain, login
 
 smtp_tls_security_level = ${SMTP_TLS_SECURITY_LEVEL}
@@ -288,6 +311,7 @@ render_config() {
   apply_defaults
   validate_config
   compute_relayhost
+  compute_mynetworks
   compute_sasl_state
   # Sets SMTPD_RECIPIENT_RESTRICTIONS and writes $CONF_DIR/recipient_access.
   # Called (not subshelled) so the variable is visible to render_main_cf.
@@ -324,7 +348,11 @@ write_sasl_secret() {
   trap abort_sasl_secret INT TERM HUP QUIT
 
   # Write credentials with restrictive permissions from the start (umask 077
-  # in subshell avoids a brief world-readable window before chmod).
+  # in subshell avoids a brief world-readable window before chmod). Remove any
+  # pre-existing plaintext first: redirection to an existing file truncates
+  # but preserves its mode, so only the create path honors the umask — same
+  # guard the hashed map gets before postmap below.
+  rm -f "$SASL_PASSWD_FILE"
   if ! (umask 077 && printf '%s %s:%s\n' "$RELAYHOST_VALUE" "$RELAY_LOGIN" "$RELAY_PASSWORD" \
     >"$SASL_PASSWD_FILE"); then
     printf 'level=error msg="failed to write SASL credentials file" path=%s\n' "$SASL_PASSWD_FILE" >&2
@@ -334,8 +362,10 @@ write_sasl_secret() {
   # inside a restrictive umask so a newly created .db file is 0600. But
   # postmap rewrites a PRE-EXISTING map in place and preserves its current
   # mode, so a leftover permissive sasl_passwd.db/.lmdb (e.g. 0644 from a
-  # prior image build) would keep leaking the hashed credentials. Remove any
-  # pre-existing hashed map first so the umask controls the recreated file.
+  # prior image build) would keep exposing the credentials -- 'hash:' names
+  # the table format, not a digest; the map stores login and password
+  # verbatim. Remove any pre-existing map first so the umask controls the
+  # recreated file.
   rm -f "${SASL_PASSWD_FILE}.db" "${SASL_PASSWD_FILE}.lmdb"
   if ! (umask 077 && postmap "$SASL_PASSWD_FILE"); then
     printf 'level=error msg="postmap failed"\n' >&2
@@ -346,7 +376,11 @@ write_sasl_secret() {
   chmod 600 "${SASL_PASSWD_FILE}.db" "${SASL_PASSWD_FILE}.lmdb" 2>/dev/null || true
   # Remove plaintext credentials; Postfix only reads the .db file.
   cleanup_sasl_plaintext
-  trap - EXIT INT TERM HUP QUIT
+  # Drop only the EXIT cleanup trap and re-arm the startup handler: clearing
+  # all traps here would leave the rest of startup (postfix checks, upstream
+  # probe) without signal handling as PID 1.
+  trap - EXIT
+  trap startup_abort INT TERM HUP QUIT
 
   printf 'level=info msg="SASL authentication configured"\n' >&2
 }
@@ -418,6 +452,20 @@ log_startup() {
 }
 
 # ---------------------------------------------------------------------------
+# startup_abort — terminating-signal handler for the whole pre-exec startup
+# path. As PID 1 the shell ignores SIGTERM/SIGINT with default disposition,
+# so without an explicit handler a `docker stop` during startup (notably
+# probe_upstream, which blocks up to STARTUP_PROBE_TIMEOUT+2 seconds, or
+# postfix set-permissions over a large spool) is silently ignored until
+# Docker escalates to SIGKILL. Exit non-zero so the stop request is honored.
+# ---------------------------------------------------------------------------
+startup_abort() {
+  trap - INT TERM HUP QUIT
+  printf 'level=info msg="received termination signal during startup; aborting"\n' >&2
+  exit 1
+}
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 case "$MODE" in
@@ -426,11 +474,16 @@ case "$MODE" in
     printf 'level=info msg="config rendered" conf_dir=%s\n' "$CONF_DIR" >&2
     ;;
   run)
+    trap startup_abort INT TERM HUP QUIT
     render_config
     write_sasl_secret
+    # Credentials are persisted in the 0600 hashed map; drop the env copies so
+    # they do not linger in /proc/1/environ for the container's lifetime.
+    unset RELAY_PASSWORD RELAY_LOGIN
     run_postfix_checks
     probe_upstream
     log_startup
+    trap - INT TERM HUP QUIT
     exec postfix start-fg
     ;;
   *)

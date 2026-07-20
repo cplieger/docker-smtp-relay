@@ -11,7 +11,8 @@ relayhost = [email-smtp.us-east-1.amazonaws.com]:587
 
 smtp_sasl_auth_enable = yes
 smtp_sasl_password_maps = hash:@CONF_DIR@/sasl_passwd
-smtp_sasl_security_options = noanonymous
+smtp_sasl_security_options = noanonymous, noplaintext
+smtp_sasl_tls_security_options = noanonymous
 smtp_sasl_mechanism_filter = plain, login
 
 smtp_tls_security_level = secure

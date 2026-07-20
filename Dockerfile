@@ -91,6 +91,7 @@ RUN { wget -q --tries=3 --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz" \
     && grep -q '//#define HAS_NIS' src/util/sys_defs.h \
     && grep -q ':/etc/postfix/aliases' src/util/sys_defs.h \
     && sed -i 's:/usr/local/:/usr/:g' conf/master.cf \
+    && ! grep -q '/usr/local/' conf/master.cf \
     && sed -i 's|"`bin/postconf -dhx mail_version`"|"`bin/postconf -c $CONFIG_DIRECTORY -dhx mail_version`"|' postfix-install \
     && grep -q 'postconf -c \$CONFIG_DIRECTORY' postfix-install \
     && cflags="-Os -fstack-clash-protection -Wformat -Werror=format-security" \

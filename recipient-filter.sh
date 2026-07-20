@@ -8,7 +8,9 @@
 # class uses ] first (POSIX requirement), escapes / because it is the Postfix
 # regexp delimiter, and uses # as the sed delimiter to avoid doubling slashes.
 # Both { and } are escaped together so the class stays symmetric and obviously
-# covers every PCRE metacharacter Postfix regexp supports.
+# covers every metacharacter of the POSIX regular expressions that Postfix
+# regexp: tables use (the class would also cover pcre: if the map type ever
+# changed).
 escape_postfix_regex() {
   printf '%s' "$1" | sed 's#[].[\\^$*+?(){}|/]#\\&#g'
 }

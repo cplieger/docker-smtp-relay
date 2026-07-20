@@ -4,7 +4,7 @@ compatibility_level = 3.6
 
 myhostname = smtp-relay.local
 mydestination = localhost
-mynetworks = 127.0.0.0/8 [::1]/128 192.168.0.0/16 172.16.0.0/12 10.0.0.0/8
+mynetworks = 127.0.0.0/8 [::1]/128 192.168.0.0/16 [fd00::]/8
 inet_interfaces = all
 
 relayhost = [smtp.example.com]:587
@@ -32,6 +32,6 @@ message_size_limit = 10240000
 mailbox_size_limit = 10240000
 
 smtpd_relay_restrictions = permit_mynetworks, reject
-smtpd_recipient_restrictions = check_recipient_access regexp:@CONF_DIR@/recipient_access, reject
+smtpd_recipient_restrictions = permit_mynetworks, reject
 
 maillog_file = /dev/stdout
