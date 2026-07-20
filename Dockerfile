@@ -45,6 +45,7 @@ RUN apk add --no-cache \
         build-base \
         coreutils \
         cyrus-sasl-dev \
+        gpgv \
         icu-dev \
         linux-headers \
         lmdb-dev \
@@ -59,6 +60,18 @@ RUN apk add --no-cache \
 ARG POSTFIX_VERSION
 ARG POSTFIX_SHA256
 WORKDIR /build/postfix
+# Wietse Venema's Postfix release signing key as a minimal dearmored keyring
+# (fingerprint 622C7C012254C186677469C50C0B590E80CA15A7, dsa2048/2015-10-10),
+# cross-checked against high5.nl and ftp.porcupine.org (wietse.pgp, identical
+# bytes on both) and keyserver.ubuntu.com. gpgv below verifies the release's
+# detached .gpg2 signature against it, authenticating the publisher
+# independently of the mirrors: the SHA256 pin alone is refreshed from the
+# same mirror that serves the tarball, so a compromised mirror could supply
+# both a malicious tarball and its matching hash during a version bump.
+# Refresh (only if upstream ever rotates the key - verify the new fingerprint
+# against multiple authoritative sources first):
+# curl -sL https://high5.nl/mirrors/postfix-release/wietse.pgp | gpg --dearmor > postfix-release.gpg
+COPY postfix-release.gpg /usr/local/share/postfix-release.gpg
 # Fetch + verify + build + stage-install. The seds replicate Alpine's aports
 # prepare()/package() steps so the installed tree matches the apk package
 # byte-for-byte where it matters: NIS map support off, default alias database
@@ -73,27 +86,44 @@ WORKDIR /build/postfix
 # SC2016 is a false positive here.
 # The tarball is fetched from the primary mirror (high5.nl, the release
 # mirror Alpine's own package builds use) with the upstream origin server
-# (ftp.porcupine.org, plain HTTP — integrity comes from the SHA256 pin, not
-# the transport) as fallback, so a single-mirror outage cannot block builds.
-# -O pins the output name on both attempts so a partial file from a failed
-# primary fetch is truncated by the fallback instead of being saved aside.
-# hadolint ignore=SC2016
-RUN { wget -q --tries=3 --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz" \
+# (ftp.porcupine.org, plain HTTP — integrity comes from the SHA256 pin and
+# the gpgv signature check, not the transport) as fallback, so a
+# single-mirror outage cannot block builds. The detached .gpg2 signature is
+# fetched with the same primary/fallback pair and verified with gpgv against
+# the committed release keyring before the SHA check and extraction; both
+# gates are fail-closed. -O pins the output name on both attempts so a
+# partial file from a failed primary fetch is truncated by the fallback
+# instead of being saved aside. wget deliberately runs without -q so a
+# mirror/network failure keeps its diagnostic in the BuildKit log (DL3047
+# wants -q/-nv/--progress back, but busybox wget has no -nv/--progress and
+# -q is what silenced fetch failures; BuildKit hides the output on success).
+# hadolint ignore=SC2016,DL3047
+RUN { wget --tries=3 --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz" \
         "https://high5.nl/mirrors/postfix-release/official/postfix-${POSTFIX_VERSION#v}.tar.gz" \
-      || wget -q --tries=3 --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz" \
+      || wget --tries=3 --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz" \
         "http://ftp.porcupine.org/mirrors/postfix-release/official/postfix-${POSTFIX_VERSION#v}.tar.gz"; } \
+    && { wget --tries=3 --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz.gpg2" \
+        "https://high5.nl/mirrors/postfix-release/official/postfix-${POSTFIX_VERSION#v}.tar.gz.gpg2" \
+      || wget --tries=3 --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz.gpg2" \
+        "http://ftp.porcupine.org/mirrors/postfix-release/official/postfix-${POSTFIX_VERSION#v}.tar.gz.gpg2"; } \
+    && gpgv --keyring /usr/local/share/postfix-release.gpg \
+        "postfix-${POSTFIX_VERSION#v}.tar.gz.gpg2" "postfix-${POSTFIX_VERSION#v}.tar.gz" \
     && echo "${POSTFIX_SHA256}  postfix-${POSTFIX_VERSION#v}.tar.gz" | sha256sum -c - \
     && tar xzf "postfix-${POSTFIX_VERSION#v}.tar.gz" --strip-components=1 --no-same-owner \
-    && rm "postfix-${POSTFIX_VERSION#v}.tar.gz" \
+    && rm "postfix-${POSTFIX_VERSION#v}.tar.gz" "postfix-${POSTFIX_VERSION#v}.tar.gz.gpg2" \
     && sed -i -e 's|#define HAS_NIS|//#define HAS_NIS|g' \
            -e '/^#define ALIAS_DB_MAP/s|:/etc/aliases|:/etc/postfix/aliases|' \
            src/util/sys_defs.h \
-    && grep -q '//#define HAS_NIS' src/util/sys_defs.h \
-    && grep -q ':/etc/postfix/aliases' src/util/sys_defs.h \
+    && { grep -q '//#define HAS_NIS' src/util/sys_defs.h \
+      || { printf '%s\n' 'FAIL: HAS_NIS was not commented out in src/util/sys_defs.h' >&2; exit 1; }; } \
+    && { grep -q ':/etc/postfix/aliases' src/util/sys_defs.h \
+      || { printf '%s\n' 'FAIL: ALIAS_DB_MAP was not rewritten to /etc/postfix/aliases in src/util/sys_defs.h' >&2; exit 1; }; } \
     && sed -i 's:/usr/local/:/usr/:g' conf/master.cf \
-    && ! grep -q '/usr/local/' conf/master.cf \
+    && { ! grep -q '/usr/local/' conf/master.cf \
+      || { printf '%s\n' 'FAIL: /usr/local/ paths remain in conf/master.cf' >&2; exit 1; }; } \
     && sed -i 's|"`bin/postconf -dhx mail_version`"|"`bin/postconf -c $CONFIG_DIRECTORY -dhx mail_version`"|' postfix-install \
-    && grep -q 'postconf -c \$CONFIG_DIRECTORY' postfix-install \
+    && { grep -q 'postconf -c \$CONFIG_DIRECTORY' postfix-install \
+      || { printf '%s\n' 'FAIL: mail_version lookup in postfix-install was not rewritten to use $CONFIG_DIRECTORY' >&2; exit 1; }; } \
     && cflags="-Os -fstack-clash-protection -Wformat -Werror=format-security" \
     && ldflags="-Wl,--as-needed,-O1,--sort-common" \
     && ccargs='-DNO_DB -DDEF_CACHE_DB_TYPE=\"lmdb\"' \
@@ -141,7 +171,7 @@ RUN { wget -q --tries=3 --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz" \
     # entrypoint at every boot — would trip on them at runtime instead of
     # build time), AND load-bearing surviving entries must still be present
     # (proves the seds did not over-delete or hit an empty/renamed file).
-    && ! grep -q \
+    && { ! grep -q \
         -e 'shlib_directory/postfix-' \
         -e 'meta_directory/makedefs\.out' \
         -e 'manpage_directory' \
@@ -149,9 +179,13 @@ RUN { wget -q --tries=3 --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz" \
         -e 'config_directory/TLS_LICENSE' \
         -e 'config_directory/[^/]\+\.cf\.default' \
         /out/etc/postfix/postfix-files \
-    && grep -q '^\$config_directory/main\.cf:' /out/etc/postfix/postfix-files \
-    && grep -q '^\$daemon_directory/smtpd:' /out/etc/postfix/postfix-files \
-    && grep -q '^\$queue_directory/maildrop:' /out/etc/postfix/postfix-files \
+      || { printf '%s\n' 'FAIL: trimmed doc/manpage/.default/LICENSE entries remain in /out/etc/postfix/postfix-files' >&2; exit 1; }; } \
+    && { grep -q '^\$config_directory/main\.cf:' /out/etc/postfix/postfix-files \
+      || { printf '%s\n' 'FAIL: $config_directory/main.cf entry missing from /out/etc/postfix/postfix-files' >&2; exit 1; }; } \
+    && { grep -q '^\$daemon_directory/smtpd:' /out/etc/postfix/postfix-files \
+      || { printf '%s\n' 'FAIL: $daemon_directory/smtpd entry missing from /out/etc/postfix/postfix-files' >&2; exit 1; }; } \
+    && { grep -q '^\$queue_directory/maildrop:' /out/etc/postfix/postfix-files \
+      || { printf '%s\n' 'FAIL: $queue_directory/maildrop entry missing from /out/etc/postfix/postfix-files' >&2; exit 1; }; } \
     && chown postfix /out/var/spool/postfix/* /out/var/lib/postfix \
     && chown root:postfix /out/var/spool/postfix/pid \
     && chgrp postdrop /out/var/spool/postfix/maildrop /out/var/spool/postfix/public
@@ -210,37 +244,69 @@ RUN ln -f /usr/sbin/sendmail /usr/bin/newaliases \
 # source-built Postfix: exact pinned version; TLS, Cyrus SASL client, and
 # EAI/SMTPUTF8 compiled in; every map type the generated config relies on
 # (hash:/btree: on lmdb, regexp:, plus cidr and pcre) present; setgid
-# postdrop plumbing intact after COPY; and a boot-shaped sequence (render to
+# postdrop plumbing intact after COPY; toolchain hardening (PIE, non-exec
+# stack, RELRO + BIND_NOW, stack protector) present on the shipped daemons;
+# and a boot-shaped sequence (render to
 # /etc/postfix, newaliases, `postfix check`, regexp lookup, postmap/lmdb
 # round-trip) passes. A failure fails the build.
 # ---------------------------------------------------------------------------
 FROM base AS test
+SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 ARG POSTFIX_VERSION
 COPY --chmod=755 validate.sh recipient-filter.sh entrypoint.sh /usr/local/bin/
 COPY tests/ /tmp/tests/
 RUN ENTRYPOINT_DIR=/usr/local/bin sh /tmp/tests/render-test.sh \
-    && test "$(postconf -h mail_version)" = "${POSTFIX_VERSION#v}" \
+    && { test "$(postconf -h mail_version)" = "${POSTFIX_VERSION#v}" \
+      || { printf 'FAIL: mail_version %s does not match pinned %s\n' \
+             "$(postconf -h mail_version)" "${POSTFIX_VERSION#v}" >&2; exit 1; }; } \
     && postconf -T compile-version >/dev/null \
     && ldd /usr/libexec/postfix/smtpd >/tmp/smtpd-libs \
-    && grep -q libicuuc /tmp/smtpd-libs \
+    && { grep -q libicuuc /tmp/smtpd-libs \
+      || { printf '%s\n' 'FAIL: smtpd is not linked against libicuuc (EAI/SMTPUTF8 missing)' >&2; exit 1; }; } \
     && postconf -A >/tmp/sasl-client-types \
-    && grep -qx cyrus /tmp/sasl-client-types \
+    && { grep -qx cyrus /tmp/sasl-client-types \
+      || { printf '%s\n' 'FAIL: cyrus missing from postconf -A (SASL client auth not compiled in)' >&2; exit 1; }; } \
     && postconf -m >/tmp/map-types \
     && for m in btree cidr hash lmdb pcre regexp; do \
-         grep -qx "$m" /tmp/map-types || exit 1; \
+         grep -qx "$m" /tmp/map-types \
+           || { printf 'FAIL: map type %s missing from postconf -m\n' "$m" >&2; exit 1; }; \
        done \
-    && test -g /usr/sbin/postdrop \
-    && test -g /usr/sbin/postqueue \
+    && { test -g /usr/sbin/postdrop \
+      || { printf '%s\n' 'FAIL: /usr/sbin/postdrop lost its setgid bit' >&2; exit 1; }; } \
+    && { test -g /usr/sbin/postqueue \
+      || { printf '%s\n' 'FAIL: /usr/sbin/postqueue lost its setgid bit' >&2; exit 1; }; } \
+    # Fail-closed toolchain-hardening assertions: the daemons' PIE, non-exec
+    # stack, RELRO+BIND_NOW, and stack-protector properties currently come
+    # from Alpine toolchain defaults; asserting them here turns silent
+    # hardening regressions (a toolchain or makedefs change) into build
+    # failures. pax-utils (scanelf) is test-stage-only and never ships.
+    # If a strip or UPX step is ever added, keep the symbol check before
+    # strip and the header checks before UPX.
+    && apk add --no-cache pax-utils \
+    && for b in /usr/libexec/postfix/master /usr/libexec/postfix/smtpd \
+                /usr/libexec/postfix/smtp /usr/sbin/postmap; do \
+         scanelf -B -E ET_DYN "$b" | grep -q . \
+           || { printf 'hardening: %s is not PIE (ET_DYN)\n' "$b" >&2; exit 1; }; \
+         scanelf -Bb "$b" | awk 'NR==1 { exit !($2 == "NOW") }' \
+           || { printf 'hardening: %s lacks BIND_NOW\n' "$b" >&2; exit 1; }; \
+         scanelf -Be "$b" | awk 'NR==1 { exit !($2 == "RW-" && $3 == "R--") }' \
+           || { printf 'hardening: %s lacks RW- GNU_STACK + R-- RELRO\n' "$b" >&2; exit 1; }; \
+         scanelf -Bs __stack_chk_fail "$b" | grep -q __stack_chk_fail \
+           || { printf 'hardening: %s lacks stack protector\n' "$b" >&2; exit 1; }; \
+       done \
     && env CONF_DIR=/etc/postfix RELAY_HOST=smtp.example.com \
         RECIPIENT_RESTRICTIONS="ops@example.com" \
         sh /usr/local/bin/entrypoint.sh render \
     && newaliases \
     && postfix check \
-    && test "$(postconf -hx smtputf8_enable)" = "yes" \
-    && test "$(postmap -q ops@example.com regexp:/etc/postfix/recipient_access)" = "OK" \
+    && { test "$(postconf -hx smtputf8_enable)" = "yes" \
+      || { printf '%s\n' 'FAIL: smtputf8_enable is not yes in the rendered config' >&2; exit 1; }; } \
+    && { test "$(postmap -q ops@example.com regexp:/etc/postfix/recipient_access)" = "OK" \
+      || { printf '%s\n' 'FAIL: regexp lookup of ops@example.com in recipient_access did not return OK' >&2; exit 1; }; } \
     && printf '%s\n' 'smtp.example.com probe:secret' >/tmp/sasl-probe \
     && postmap /tmp/sasl-probe \
-    && test -f /tmp/sasl-probe.lmdb \
+    && { test -f /tmp/sasl-probe.lmdb \
+      || { printf '%s\n' 'FAIL: postmap did not produce /tmp/sasl-probe.lmdb (lmdb default map type broken)' >&2; exit 1; }; } \
     && rm -f /tmp/sasl-probe /tmp/sasl-probe.lmdb /tmp/map-types \
         /tmp/sasl-client-types /tmp/smtpd-libs \
     && touch /tmp/tests-passed

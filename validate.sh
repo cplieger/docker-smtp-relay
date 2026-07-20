@@ -23,10 +23,14 @@ validate_no_newlines() {
   fi
 }
 
+# Rejection logs must not interpolate the raw rejected token: an arbitrary
+# value can carry a double quote (STARTUP_PROBE='bad"value' renders malformed
+# logfmt that can make Alloy's parsing stage drop the fields precisely when
+# startup fails). Log bounded context (var=NAME, valid="...") instead.
 validate_numeric() {
   case "$2" in
     '' | *[!0-9]*)
-      printf 'level=error msg="env var must be a non-negative integer" var=%s value="%s"\n' "$1" "$2" >&2
+      printf 'level=error msg="env var must be a non-negative integer" var=%s\n' "$1" >&2
       return 1
       ;;
   esac
@@ -34,7 +38,7 @@ validate_numeric() {
   # "Illegal number" beyond LONG_MAX, and validate_range's `if` silently
   # swallows that error and treats the value as in-range.
   if [ "${#2}" -gt 18 ]; then
-    printf 'level=error msg="env var numeric value too large" var=%s value="%s"\n' "$1" "$2" >&2
+    printf 'level=error msg="env var numeric value too large" var=%s length=%d\n' "$1" "${#2}" >&2
     return 1
   fi
 }
@@ -146,7 +150,9 @@ validate_tls_level() {
   for _lvl in $TLS_LEVELS; do
     [ "$1" = "$_lvl" ] && return 0
   done
-  printf 'level=error msg="invalid TLS security level" value="%s" valid="%s"\n' "$1" "$TLS_LEVELS" >&2
+  # The rejected value is unvalidated input; do not interpolate it (logfmt
+  # quoting) — the allowlist is enough context to fix the config.
+  printf 'level=error msg="invalid TLS security level" var=SMTP_TLS_SECURITY_LEVEL valid="%s"\n' "$TLS_LEVELS" >&2
   return 1
 }
 

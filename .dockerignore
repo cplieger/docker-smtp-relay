@@ -1,5 +1,6 @@
 *
 !Dockerfile
+!postfix-release.gpg
 !entrypoint.sh
 !validate.sh
 !recipient-filter.sh
