@@ -54,6 +54,21 @@ build_recipient_filter() {
           exit 2
           ;;
         /*/) # already a Postfix regexp literal
+          # Test-compile the pattern with grep -E (musl regcomp, the same
+          # regex engine Postfix's regexp: tables link against in this
+          # image). dict_regexp ignores an uncompilable line at map-open
+          # time with only a maillog warning, so the intended allow rule
+          # silently vanishes and the /.*/ REJECT terminator rejects that
+          # mail; surface it at deploy time. grep exit >1 = bad pattern
+          # (0/1 = pattern compiled). Log-only: never rejects the config.
+          _rcpt_pat=${_entry#/}
+          _rcpt_pat=${_rcpt_pat%/}
+          _rcpt_grc=0
+          printf '' | grep -E -e "$_rcpt_pat" >/dev/null 2>&1 || _rcpt_grc=$?
+          if [ "$_rcpt_grc" -gt 1 ]; then
+            printf 'level=warn msg="recipient restriction regex does not compile; Postfix will ignore this rule and matching recipients will be rejected" pattern="%s"\n' \
+              "$(sanitize_token "$_rcpt_pat")" >&2
+          fi
           emit_rcpt_line "$_entry OK"
           ;;
         *@*) # full address: anchor both ends

@@ -181,6 +181,10 @@ check_sanitize() {
 # single parseable logfmt record.
 check_sanitize control-bytes "$(printf 'bad\r\vnet/24')" 'badnet/24'
 
+# The 512-byte cap must truncate and append the literal [truncated] marker
+# so a hostile oversized value cannot flood a single log line.
+check_sanitize truncation "$(printf '%0600d' 0)" "$(printf '%0512d' 0)[truncated]"
+
 # --- Summary --------------------------------------------------------------
 printf 'render-test: %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
