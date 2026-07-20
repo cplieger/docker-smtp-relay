@@ -359,7 +359,11 @@ render_config() {
 # stop grace, drawing a SIGKILL before any abort line is logged.
 # run_interruptible backgrounds the operation and blocks in `wait`, which IS
 # interruptible: the signal handler runs immediately, TERMs and reaps the
-# recorded child via terminate_startup_child, and exits promptly.
+# recorded child via terminate_startup_child, and exits promptly. Function
+# wrappers exec their external command so the recorded PID names the real
+# operation; the probe wrapper deliberately keeps its QUIT pipeline (see
+# probe_relay_tcp), so there the TERM lands on the wrapper shell and the
+# timeout-bounded pipeline children exit on their own deadline.
 # ---------------------------------------------------------------------------
 STARTUP_CHILD_PID=''
 
@@ -394,10 +398,12 @@ cleanup_sasl_plaintext() { rm -f "$SASL_PASSWD_FILE"; }
 
 # postmap_restricted — postmap under a restrictive umask so the newly created
 # map file is 0600. Runs as a run_interruptible background child, which is a
-# subshell, so the umask never leaks into the main shell.
+# subshell, so the umask never leaks into the main shell. exec replaces the
+# wrapper with postmap itself so the recorded PID names the real operation
+# (terminate_startup_child TERMs postmap, not an intermediate shell).
 postmap_restricted() {
   umask 077
-  postmap "$1"
+  exec postmap "$1"
 }
 
 # On a terminating signal (e.g. Docker sending SIGTERM during a stop), remove
@@ -531,9 +537,11 @@ probe_upstream() {
 # ---------------------------------------------------------------------------
 # scan_queue_files DIR OUTFILE — the bounded find, wrapped so
 # run_interruptible can background it as a single child. 5s is generous for
-# a healthy spool while keeping startup bounded on a pathological one.
+# a healthy spool while keeping startup bounded on a pathological one. exec
+# replaces the wrapper so the recorded PID names the timeout-supervised find
+# (terminate_startup_child TERMs the operation, not an intermediate shell).
 scan_queue_files() {
-  timeout 5 find "$1" -type f >"$2" 2>/dev/null
+  exec timeout 5 find "$1" -type f >"$2" 2>/dev/null
 }
 
 count_queue() {
@@ -542,8 +550,10 @@ count_queue() {
   _queue_count=0
   _queue_ok=true
   # An absent directory is a fresh spool with nothing queued (the volume may
-  # not carry the full layout yet), not a scan failure.
-  [ -d "$_cq_dir" ] && {
+  # not carry the full layout yet), not a scan failure. An if (not a bare
+  # AND-list) so the absent-dir path completes with status 0 instead of
+  # tripping set -e in the caller.
+  if [ -d "$_cq_dir" ]; then
     _cq_tmp=$(mktemp)
     if run_interruptible scan_queue_files "$_cq_dir" "$_cq_tmp"; then
       _queue_count=$(wc -l <"$_cq_tmp")
@@ -552,7 +562,7 @@ count_queue() {
       printf 'level=warn msg="queue depth unavailable" queue=%s\n' "$_cq_name" >&2
     fi
     rm -f "$_cq_tmp"
-  }
+  fi
 }
 
 # ---------------------------------------------------------------------------

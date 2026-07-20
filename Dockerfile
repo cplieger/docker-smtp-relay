@@ -287,9 +287,9 @@ RUN ENTRYPOINT_DIR=/usr/local/bin sh /tmp/tests/render-test.sh \
                 /usr/libexec/postfix/smtp /usr/sbin/postmap; do \
          scanelf -B -E ET_DYN "$b" | grep -q . \
            || { printf 'hardening: %s is not PIE (ET_DYN)\n' "$b" >&2; exit 1; }; \
-         scanelf -Bb "$b" | awk 'NR==1 { exit !($2 == "NOW") }' \
+         scanelf -Bb "$b" | awk 'NR==1 { ok = ($2 == "NOW") } END { exit !(NR >= 1 && ok) }' \
            || { printf 'hardening: %s lacks BIND_NOW\n' "$b" >&2; exit 1; }; \
-         scanelf -Be "$b" | awk 'NR==1 { exit !($2 == "RW-" && $3 == "R--") }' \
+         scanelf -Be "$b" | awk 'NR==1 { ok = ($2 == "RW-" && $3 == "R--") } END { exit !(NR >= 1 && ok) }' \
            || { printf 'hardening: %s lacks RW- GNU_STACK + R-- RELRO\n' "$b" >&2; exit 1; }; \
          scanelf -Bs __stack_chk_fail "$b" | grep -q __stack_chk_fail \
            || { printf 'hardening: %s lacks stack protector\n' "$b" >&2; exit 1; }; \
