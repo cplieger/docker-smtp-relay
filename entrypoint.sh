@@ -90,10 +90,21 @@ apply_defaults() {
 
 # ---------------------------------------------------------------------------
 # validate_config — run every input check, exit 2 on the first failure.
+# Split into one helper per validation concern; validate_config (defined
+# after the helpers) orchestrates them in the original check order, so exit-2
+# precedence is unchanged. Two blocks deliberately live outside their tidiest
+# home to preserve that order: the RELAY_HOST required check ends
+# validate_declared_fields (it must fire before the SASL both-or-neither
+# check), and the cleartext-TLS guard ends validate_relay_acceptance (it must
+# fire after the ACCEPTED_NETWORKS checks).
 # ---------------------------------------------------------------------------
+
+# validate_declared_fields — the generic spec-table interpreter, the
+# field-specific validators not expressible in the table, and the
+# required-variable check.
 # Format: VAR_NAME:check[,check...]
 # Checks: nl=no_newlines, num=numeric, meta=no_metacharacters, range=MIN:MAX
-validate_config() {
+validate_declared_fields() {
   _spec_table="
 CONF_DIR:nl,meta
 RELAY_HOST:nl,meta
@@ -152,19 +163,27 @@ STARTUP_PROBE_TIMEOUT:nl,num,range=1:10
   validate_sasl_password "$RELAY_PASSWORD" || exit 2
   validate_tls_level "$SMTP_TLS_SECURITY_LEVEL" || exit 2
 
-  # Required variables
+  # Required variables (kept here, before the SASL pairing check, so the
+  # exit-2 precedence between the two errors is unchanged)
   if [ -z "$RELAY_HOST" ]; then
     printf 'level=error msg="RELAY_HOST must be set"\n' >&2
     exit 2
   fi
+}
 
+# validate_sasl_config — SASL credentials are both-or-neither.
+validate_sasl_config() {
   if [ -z "$RELAY_LOGIN" ] && [ -z "$RELAY_PASSWORD" ]; then
     printf 'level=info msg="SASL auth disabled; RELAY_LOGIN/RELAY_PASSWORD not set"\n' >&2
   elif [ -z "$RELAY_LOGIN" ] || [ -z "$RELAY_PASSWORD" ]; then
     printf 'level=error msg="both RELAY_LOGIN and RELAY_PASSWORD must be set for SASL auth"\n' >&2
     exit 2
   fi
+}
 
+# validate_relay_acceptance — relay-acceptance policy: who we accept mail
+# from, and that credentials never travel a cleartext upstream channel.
+validate_relay_acceptance() {
   # ACCEPTED_NETWORKS: reject open-relay and overly broad configs
   if [ -z "$ACCEPTED_NETWORKS" ]; then
     printf 'level=error msg="ACCEPTED_NETWORKS is empty"\n' >&2
@@ -173,7 +192,8 @@ STARTUP_PROBE_TIMEOUT:nl,num,range=1:10
   validate_no_open_relay "$ACCEPTED_NETWORKS" || exit 2
 
   # Reject cleartext TLS when SASL credentials are configured — sending
-  # passwords over an unencrypted channel is a credential leak.
+  # passwords over an unencrypted channel is a credential leak. (Kept here,
+  # after the ACCEPTED_NETWORKS checks, so exit-2 precedence is unchanged.)
   if sasl_enabled; then
     case "$SMTP_TLS_SECURITY_LEVEL" in
       none | may)
@@ -183,7 +203,10 @@ STARTUP_PROBE_TIMEOUT:nl,num,range=1:10
         ;;
     esac
   fi
+}
 
+# validate_runtime_config — runtime toggles and the filesystem contract.
+validate_runtime_config() {
   # STARTUP_PROBE is a plain boolean toggle; anything other than true/false is
   # a config typo worth surfacing rather than silently treating as disabled.
   case "$STARTUP_PROBE" in
@@ -206,6 +229,13 @@ STARTUP_PROBE_TIMEOUT:nl,num,range=1:10
     printf 'level=error msg="CONF_DIR must be an existing writable directory" conf_dir="%s"\n' "$(sanitize_token "$CONF_DIR")" >&2
     exit 2
   fi
+}
+
+validate_config() {
+  validate_declared_fields
+  validate_sasl_config
+  validate_relay_acceptance
+  validate_runtime_config
 
   printf 'level=info msg="input validation passed"\n' >&2
 }
@@ -560,12 +590,25 @@ count_queue() {
     # A mktemp failure (e.g. full /tmp) stays fail-soft like a failed scan:
     # report the depth as unavailable instead of aborting startup under set -e.
     if _cq_tmp=$(mktemp) && run_interruptible scan_queue_files "$_cq_dir" "$_cq_tmp"; then
-      _queue_count=$(wc -l <"$_cq_tmp")
+      # The wc read stays fail-soft like the scan: an I/O error or a
+      # disappearing temp file reports the depth as unavailable instead of
+      # aborting PID 1 under set -e before Postfix starts.
+      if ! _queue_count=$(wc -l <"$_cq_tmp"); then
+        _queue_count=0
+        _queue_ok=false
+        printf 'level=warn msg="queue depth unavailable" queue=%s\n' "$_cq_name" >&2
+      fi
     else
       _queue_ok=false
       printf 'level=warn msg="queue depth unavailable" queue=%s\n' "$_cq_name" >&2
     fi
-    if [ -n "$_cq_tmp" ]; then rm -f "$_cq_tmp"; fi
+    if [ -n "$_cq_tmp" ]; then
+      # Cleanup failure is warn-and-continue: the telemetry path is optional
+      # and a stray temp file must never abort startup under set -e.
+      if ! rm -f "$_cq_tmp"; then
+        printf 'level=warn msg="queue temp cleanup failed" queue=%s\n' "$_cq_name" >&2
+      fi
+    fi
   fi
 }
 

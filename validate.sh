@@ -31,10 +31,15 @@ validate_no_newlines() {
 # a multi-entry list needs to identify WHICH entry failed), route it through
 # sanitize_token and emit it as a quoted logfmt field.
 
-# sanitize_token -- strip backslashes and double quotes so a rejected raw
-# value can be logged as a bounded, parseable logfmt field.
+# sanitize_token -- strip logfmt delimiters (backslash, double quote) and
+# control bytes (CR, VT, FF, ...), and bound the value to 512 bytes, so a
+# rejected raw value can be logged as a bounded, parseable logfmt field.
+# Values beyond the cap get a literal [truncated] marker appended.
 sanitize_token() {
-  printf '%s' "$1" | tr -d '\\"'
+  printf '%.512s' "$1" | LC_ALL=C tr -d '\\"[:cntrl:]'
+  if [ "${#1}" -gt 512 ]; then
+    printf '[truncated]'
+  fi
 }
 validate_numeric() {
   case "$2" in

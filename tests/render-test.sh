@@ -157,6 +157,30 @@ check_fail bad-tls-level 2 \
   RELAY_HOST=smtp.example.com \
   SMTP_TLS_SECURITY_LEVEL=bogus
 
+# --- sanitize_token regression ---------------------------------------------
+# The golden harness only diffs rendered files and asserts exit codes; there
+# is no stderr-log assertion mechanism, so exercise the log-only sanitizer
+# directly by sourcing validate.sh in a subshell.
+# check_sanitize NAME INPUT EXPECTED
+check_sanitize() {
+  _name=$1
+  _got=$(
+    # shellcheck source=../validate.sh
+    . "$ENTRYPOINT_DIR/validate.sh"
+    sanitize_token "$2"
+  )
+  if [ "$_got" = "$3" ]; then
+    pass=$((pass + 1))
+  else
+    printf 'FAIL %s: sanitize_token produced "%s", expected "%s"\n' "$_name" "$_got" "$3" >&2
+    fail=$((fail + 1))
+  fi
+}
+
+# Control bytes (CR, VT) must be stripped so a rejection log line stays a
+# single parseable logfmt record.
+check_sanitize control-bytes "$(printf 'bad\r\vnet/24')" 'badnet/24'
+
 # --- Summary --------------------------------------------------------------
 printf 'render-test: %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
