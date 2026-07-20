@@ -37,7 +37,7 @@ readonly MAIN_CF="${CONF_DIR}/main.cf"
 # ---------------------------------------------------------------------------
 # Env Var                  Type      Default              Constraints
 # -------                  ----      -------              -----------
-# ACCEPTED_NETWORKS        string    192.168.0.0/16 ...   space-separated CIDRs; min /8; no 0.0.0.0/0
+# ACCEPTED_NETWORKS        string    192.168.0.0/16 ...   space-separated CIDRs; min /8; no 0.0.0.0/0 or ::/0
 # CONF_DIR                 string    /etc/postfix         no newlines/metacharacters (rendered into main.cf paths)
 # RELAY_HOST               string    (required)           no newlines/metacharacters; non-empty
 # RELAY_PORT               integer   587                  1-65535
@@ -203,7 +203,7 @@ STARTUP_PROBE_TIMEOUT:nl,num,range=1:10
   # "input validation passed" was already logged (which misclassifies the
   # bad config as a runtime failure and blinds level=error-based alerts).
   if [ ! -d "$CONF_DIR" ] || [ ! -w "$CONF_DIR" ]; then
-    printf 'level=error msg="CONF_DIR must be an existing writable directory" conf_dir=%s\n' "$CONF_DIR" >&2
+    printf 'level=error msg="CONF_DIR must be an existing writable directory" conf_dir="%s"\n' "$(sanitize_token "$CONF_DIR")" >&2
     exit 2
   fi
 
@@ -278,7 +278,7 @@ compute_sasl_state() {
 # ---------------------------------------------------------------------------
 render_main_cf() {
   if ! _main_tmp=$(mktemp "${MAIN_CF}.XXXXXX"); then
-    printf 'level=error msg="failed to create temporary file for main.cf" conf_dir=%s\n' "$CONF_DIR" >&2
+    printf 'level=error msg="failed to create temporary file for main.cf" conf_dir="%s"\n' "$(sanitize_token "$CONF_DIR")" >&2
     exit 1
   fi
   if ! cat >"$_main_tmp" <<EOF; then
@@ -320,14 +320,14 @@ smtpd_recipient_restrictions = ${SMTPD_RECIPIENT_RESTRICTIONS}
 
 maillog_file = /dev/stdout
 EOF
-    printf 'level=error msg="failed to write main.cf (disk full or read-only?)" path=%s\n' "$_main_tmp" >&2
+    printf 'level=error msg="failed to write main.cf (disk full or read-only?)" path="%s"\n' "$(sanitize_token "$_main_tmp")" >&2
     rm -f "$_main_tmp"
     exit 1
   fi
   # mktemp creates 0600; main.cf must stay world-readable (Postfix daemons
   # run as the postfix user), matching the previous umask-derived 0644.
   if ! chmod 644 "$_main_tmp" || ! mv "$_main_tmp" "$MAIN_CF"; then
-    printf 'level=error msg="failed to move rendered main.cf into place" path=%s\n' "$MAIN_CF" >&2
+    printf 'level=error msg="failed to move rendered main.cf into place" path="%s"\n' "$(sanitize_token "$MAIN_CF")" >&2
     rm -f "$_main_tmp"
     exit 1
   fi
@@ -412,15 +412,17 @@ postmap_restricted() {
 # resume into Postfix startup after the signal, so PID 1 would ignore the stop
 # request until Docker escalated to SIGKILL. Exiting here honors shutdown.
 abort_sasl_secret() {
+  # Disarm first, matching startup_abort: a second signal arriving while the
+  # handler runs must not re-enter it mid-cleanup.
+  trap - EXIT INT TERM HUP QUIT
   terminate_startup_child
   cleanup_sasl_plaintext
-  trap - EXIT INT TERM HUP QUIT
   printf 'level=info msg="received termination signal during SASL setup; cleaned up and aborting startup"\n' >&2
   exit 1
 }
 
 write_sasl_secret() {
-  [ "$RELAY_AUTH_ENABLE" = "yes" ] || return 0
+  sasl_enabled || return 0
 
   # EXIT does best-effort plaintext removal even if postmap fails under
   # `set -e` before the explicit rm below runs. A terminating signal both
@@ -437,7 +439,7 @@ write_sasl_secret() {
   rm -f "$SASL_PASSWD_FILE"
   if ! (umask 077 && printf '%s %s:%s\n' "$RELAYHOST_VALUE" "$RELAY_LOGIN" "$RELAY_PASSWORD" \
     >"$SASL_PASSWD_FILE"); then
-    printf 'level=error msg="failed to write SASL credentials file" path=%s\n' "$SASL_PASSWD_FILE" >&2
+    printf 'level=error msg="failed to write SASL credentials file" path="%s"\n' "$(sanitize_token "$SASL_PASSWD_FILE")" >&2
     exit 1
   fi
   # postmap inherits the process umask, not the source file mode; run it
@@ -516,10 +518,10 @@ probe_upstream() {
   _probe_host="${_probe_host%\]}"
 
   if run_interruptible probe_relay_tcp "$_probe_host" "$RELAY_PORT"; then
-    printf 'level=info msg="upstream relay reachable" relay=%s\n' "$RELAYHOST_VALUE" >&2
+    printf 'level=info msg="upstream relay reachable" relay="%s"\n' "$(sanitize_token "$RELAYHOST_VALUE")" >&2
   else
-    printf 'level=warn msg="upstream relay unreachable at startup; continuing (mail will queue)" relay=%s\n' \
-      "$RELAYHOST_VALUE" >&2
+    printf 'level=warn msg="upstream relay unreachable at startup; continuing (mail will queue)" relay="%s"\n' \
+      "$(sanitize_token "$RELAYHOST_VALUE")" >&2
   fi
 }
 
@@ -554,14 +556,16 @@ count_queue() {
   # AND-list) so the absent-dir path completes with status 0 instead of
   # tripping set -e in the caller.
   if [ -d "$_cq_dir" ]; then
-    _cq_tmp=$(mktemp)
-    if run_interruptible scan_queue_files "$_cq_dir" "$_cq_tmp"; then
+    _cq_tmp=''
+    # A mktemp failure (e.g. full /tmp) stays fail-soft like a failed scan:
+    # report the depth as unavailable instead of aborting startup under set -e.
+    if _cq_tmp=$(mktemp) && run_interruptible scan_queue_files "$_cq_dir" "$_cq_tmp"; then
       _queue_count=$(wc -l <"$_cq_tmp")
     else
       _queue_ok=false
       printf 'level=warn msg="queue depth unavailable" queue=%s\n' "$_cq_name" >&2
     fi
-    rm -f "$_cq_tmp"
+    if [ -n "$_cq_tmp" ]; then rm -f "$_cq_tmp"; fi
   fi
 }
 
@@ -580,8 +584,8 @@ log_startup() {
   count_queue deferred /var/spool/postfix/deferred
   _queue_deferred=$_queue_count
   [ "$_queue_ok" = true ] || _queue_scan_ok=false
-  printf 'level=info msg="starting smtp-relay" relay=%s tls=%s networks="%s" queue_active=%d queue_deferred=%d queue_scan_ok=%s\n' \
-    "$RELAYHOST_VALUE" "$SMTP_TLS_SECURITY_LEVEL" "$ACCEPTED_NETWORKS" \
+  printf 'level=info msg="starting smtp-relay" relay="%s" tls=%s networks="%s" queue_active=%d queue_deferred=%d queue_scan_ok=%s\n' \
+    "$(sanitize_token "$RELAYHOST_VALUE")" "$SMTP_TLS_SECURITY_LEVEL" "$(sanitize_token "$ACCEPTED_NETWORKS")" \
     "$_queue_active" "$_queue_deferred" "$_queue_scan_ok" >&2
 }
 
@@ -608,7 +612,7 @@ startup_abort() {
 case "$MODE" in
   render)
     render_config
-    printf 'level=info msg="config rendered" conf_dir=%s\n' "$CONF_DIR" >&2
+    printf 'level=info msg="config rendered" conf_dir="%s"\n' "$(sanitize_token "$CONF_DIR")" >&2
     ;;
   run)
     trap startup_abort INT TERM HUP QUIT

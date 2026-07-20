@@ -20,7 +20,7 @@ escape_postfix_regex() {
 # level=error plus temp-file cleanup instead of a raw set -e diagnostic.
 emit_rcpt_line() {
   if ! printf '%s\n' "$1" >>"$_rcpt_tmp"; then
-    printf 'level=error msg="failed to write recipient_access (disk full or read-only?)" path=%s\n' "$_rcpt_tmp" >&2
+    printf 'level=error msg="failed to write recipient_access (disk full or read-only?)" path="%s"\n' "$(sanitize_token "$_rcpt_tmp")" >&2
     rm -f "$_rcpt_tmp"
     exit 1
   fi
@@ -39,7 +39,7 @@ build_recipient_filter() {
   if [ -n "$RECIPIENT_RESTRICTIONS" ]; then
     _rcpt_file="${CONF_DIR}/recipient_access"
     if ! _rcpt_tmp=$(mktemp "${_rcpt_file}.XXXXXX"); then
-      printf 'level=error msg="failed to create temporary file for recipient_access" conf_dir=%s\n' "$CONF_DIR" >&2
+      printf 'level=error msg="failed to create temporary file for recipient_access" conf_dir="%s"\n' "$(sanitize_token "$CONF_DIR")" >&2
       exit 1
     fi
     _rule_count=0
@@ -80,7 +80,7 @@ build_recipient_filter() {
     # mktemp creates 0600; the map must stay world-readable (smtpd runs as
     # the postfix user), matching the previous umask-derived 0644.
     if ! chmod 644 "$_rcpt_tmp" || ! mv "$_rcpt_tmp" "$_rcpt_file"; then
-      printf 'level=error msg="failed to move rendered recipient_access into place" path=%s\n' "$_rcpt_file" >&2
+      printf 'level=error msg="failed to move rendered recipient_access into place" path="%s"\n' "$(sanitize_token "$_rcpt_file")" >&2
       rm -f "$_rcpt_tmp"
       exit 1
     fi

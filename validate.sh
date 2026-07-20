@@ -27,6 +27,15 @@ validate_no_newlines() {
 # value can carry a double quote (STARTUP_PROBE='bad"value' renders malformed
 # logfmt that can make Alloy's parsing stage drop the fields precisely when
 # startup fails). Log bounded context (var=NAME, valid="...") instead.
+# Where the token itself must stay diagnosable (per-entry network validators:
+# a multi-entry list needs to identify WHICH entry failed), route it through
+# sanitize_token and emit it as a quoted logfmt field.
+
+# sanitize_token -- strip backslashes and double quotes so a rejected raw
+# value can be logged as a bounded, parseable logfmt field.
+sanitize_token() {
+  printf '%s' "$1" | tr -d '\\"'
+}
 validate_numeric() {
   case "$2" in
     '' | *[!0-9]*)
@@ -65,7 +74,7 @@ validate_ipv6_cidr() {
   _net=$1
   _prefix=$2
   if [ "$_prefix" -gt 128 ]; then
-    printf 'level=error msg="IPv6 prefix out of range" network=%s prefix=%s\n' "$_net" "$_prefix" >&2
+    printf 'level=error msg="IPv6 prefix out of range" network="%s" prefix=%s\n' "$(sanitize_token "$_net")" "$_prefix" >&2
     return 1
   fi
 }
@@ -75,7 +84,7 @@ validate_ipv4_cidr() {
   _ip=$2
   _prefix=$3
   if [ "$_prefix" -gt 32 ]; then
-    printf 'level=error msg="IPv4 prefix out of range" network=%s prefix=%s\n' "$_net" "$_prefix" >&2
+    printf 'level=error msg="IPv4 prefix out of range" network="%s" prefix=%s\n' "$(sanitize_token "$_net")" "$_prefix" >&2
     return 1
   fi
   _oldIFS=$IFS
@@ -84,18 +93,18 @@ validate_ipv4_cidr() {
   set -- $_ip
   IFS=$_oldIFS
   if [ $# -ne 4 ]; then
-    printf 'level=error msg="IPv4 address must have 4 octets" network=%s\n' "$_net" >&2
+    printf 'level=error msg="IPv4 address must have 4 octets" network="%s"\n' "$(sanitize_token "$_net")" >&2
     return 1
   fi
   for _oct; do
     case "$_oct" in
       '' | *[!0-9]*)
-        printf 'level=error msg="IPv4 octet not numeric" network=%s octet="%s"\n' "$_net" "$_oct" >&2
+        printf 'level=error msg="IPv4 octet not numeric" network="%s" octet="%s"\n' "$(sanitize_token "$_net")" "$(sanitize_token "$_oct")" >&2
         return 1
         ;;
     esac
     if [ "$_oct" -gt 255 ]; then
-      printf 'level=error msg="IPv4 octet out of range" network=%s octet=%s\n' "$_net" "$_oct" >&2
+      printf 'level=error msg="IPv4 octet out of range" network="%s" octet=%s\n' "$(sanitize_token "$_net")" "$_oct" >&2
       return 1
     fi
   done
@@ -105,23 +114,24 @@ validate_no_open_relay() {
   for _net in $1; do
     case "$_net" in
       0.0.0.0/0 | ::/0)
-        printf 'level=error msg="network list contains open-relay CIDR" network=%s\n' "$_net" >&2
+        # Exact-matched literal (0.0.0.0/0 or ::/0), sanitized for uniformity.
+        printf 'level=error msg="network list contains open-relay CIDR" network="%s"\n' "$(sanitize_token "$_net")" >&2
         return 1
         ;;
     esac
     _prefix="${_net##*/}"
     if [ "$_prefix" = "$_net" ]; then
-      printf 'level=error msg="network entry missing CIDR prefix" network=%s\n' "$_net" >&2
+      printf 'level=error msg="network entry missing CIDR prefix" network="%s"\n' "$(sanitize_token "$_net")" >&2
       return 1
     fi
     case "$_prefix" in
       '' | *[!0-9]*)
-        printf 'level=error msg="network entry has non-numeric prefix" network=%s\n' "$_net" >&2
+        printf 'level=error msg="network entry has non-numeric prefix" network="%s"\n' "$(sanitize_token "$_net")" >&2
         return 1
         ;;
     esac
     if [ "$_prefix" -lt 8 ]; then
-      printf 'level=error msg="network CIDR too broad (min /8)" network=%s prefix=%s\n' "$_net" "$_prefix" >&2
+      printf 'level=error msg="network CIDR too broad (min /8)" network="%s" prefix=%s\n' "$(sanitize_token "$_net")" "$_prefix" >&2
       return 1
     fi
 
@@ -136,7 +146,7 @@ validate_no_open_relay() {
       *:*) validate_ipv6_cidr "$_net" "$_prefix" || return 1 ;;
       *.*.*.*) validate_ipv4_cidr "$_net" "$_ip" "$_prefix" || return 1 ;;
       *)
-        printf 'level=error msg="unrecognized network format" network=%s\n' "$_net" >&2
+        printf 'level=error msg="unrecognized network format" network="%s"\n' "$(sanitize_token "$_net")" >&2
         return 1
         ;;
     esac
