@@ -92,6 +92,16 @@ validate_ipv4_cidr() {
     printf 'level=error msg="IPv4 prefix out of range" network="%s" prefix=%s\n' "$(sanitize_token "$_net")" "$_prefix" >&2
     return 1
   fi
+  # POSIX field splitting drops a trailing empty field, so "192.168.1.2./24"
+  # would split into four valid octets and pass; reject the trailing dot the
+  # split cannot see (leading and doubled dots already yield an empty octet
+  # the per-octet check catches).
+  case "$_ip" in
+    *.)
+      printf 'level=error msg="IPv4 address has a trailing dot" network="%s"\n' "$(sanitize_token "$_net")" >&2
+      return 1
+      ;;
+  esac
   _oldIFS=$IFS
   IFS=.
   # shellcheck disable=SC2086

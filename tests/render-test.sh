@@ -143,6 +143,10 @@ check_fail bad-port 2 \
   RELAY_HOST=smtp.example.com \
   RELAY_PORT=70000
 
+check_fail bad-network-trailing-dot 2 \
+  RELAY_HOST=smtp.example.com \
+  ACCEPTED_NETWORKS=192.168.1.2./24
+
 check_fail sasl-cleartext 2 \
   RELAY_HOST=smtp.example.com \
   RELAY_LOGIN=user \

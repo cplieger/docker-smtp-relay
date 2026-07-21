@@ -81,6 +81,19 @@ build_recipient_filter() {
             printf 'level=warn msg="recipient restriction regex does not compile; Postfix will ignore this rule and matching recipients will be rejected" pattern="%s"\n' \
               "$(sanitize_token "$_rcpt_pat")" >&2
           fi
+          # The grep compile check cannot see the delimiter contract: an
+          # unescaped / inside the pattern (e.g. /a/b/) is a valid ERE but
+          # terminates the Postfix regexp-table pattern early, so dict_regexp
+          # drops the whole line at map-open with only a maillog warning.
+          # Strip backslash escapes first; any / left is an unescaped
+          # delimiter (escape_postfix_regex escapes / for exactly this
+          # reason in the literal arms).
+          case "$(printf '%s' "$_rcpt_pat" | sed 's#\\.##g')" in
+            */*)
+              printf 'level=warn msg="recipient restriction regex contains an unescaped /; Postfix parses / as the pattern delimiter and will ignore this rule" pattern="%s"\n' \
+                "$(sanitize_token "$_rcpt_pat")" >&2
+              ;;
+          esac
           emit_rcpt_line "$_entry OK"
           ;;
         *@*) # full address: anchor both ends
@@ -88,6 +101,17 @@ build_recipient_filter() {
           emit_rcpt_line "/^${_esc}\$/ OK"
           ;;
         *) # domain-only: anchor the @-suffix
+          # A domain can never contain a slash, so a slash-bearing token here
+          # is almost certainly a mis-typed regexp literal (e.g. `/foo`
+          # missing its closing delimiter). The escaped rule compiles but can
+          # never match a real recipient; surface that at deploy time.
+          # Warn-only: rejecting it would be a config-acceptance change.
+          case "$_entry" in
+            */*)
+              printf 'level=warn msg="recipient restriction looks like a mis-typed regexp (a domain cannot contain /); this rule will never match any recipient" entry="%s"\n' \
+                "$(sanitize_token "$_entry")" >&2
+              ;;
+          esac
           _esc=$(escape_postfix_regex "$_entry")
           emit_rcpt_line "/@${_esc}\$/ OK"
           ;;
