@@ -171,7 +171,7 @@ tools.
 
 The entrypoint validates all env vars before generating Postfix
 config: newline injection, numeric range, shell metacharacters,
-open-relay CIDR rejection (`0.0.0.0/0` blocked, prefixes ≥/8 required),
+open-relay CIDR rejection (`0.0.0.0/0` and `::/0` blocked, prefixes ≥/8 required),
 TLS level allowlisting, and SASL credential field-format checks.
 Outbound TLS pins `>=TLSv1.2` and `high` cipher grade; default
 security level is `secure` (chain + hostname verification).

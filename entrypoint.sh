@@ -99,9 +99,11 @@ apply_defaults() {
 # fire after the ACCEPTED_NETWORKS checks).
 # ---------------------------------------------------------------------------
 
-# validate_field_check VAR VALUE CHECK — run one spec-table check. Omitting
-# a default arm preserves the interpreter's no-op behavior for an unknown
-# check token.
+# validate_field_check VAR VALUE CHECK — run one spec-table check. An unknown
+# check token is a spec-table typo: fail loudly (the caller exits 2), matching
+# the unknown-var guard in validate_declared_fields, instead of silently
+# skipping the intended validation. The token comes from the hardcoded
+# _spec_table, never from user input, so interpolating it is safe.
 validate_field_check() {
   case "$3" in
     nl) validate_no_newlines "$1" "$2" ;;
@@ -110,6 +112,10 @@ validate_field_check() {
     range=*)
       _vfc_range="${3#range=}"
       validate_range "$1" "$2" "${_vfc_range%%:*}" "${_vfc_range#*:}"
+      ;;
+    *)
+      printf 'level=error msg="unknown validation check" var=%s check=%s\n' "$1" "$3" >&2
+      return 1
       ;;
   esac
 }
@@ -662,18 +668,15 @@ count_queue() {
   # tripping set -e in the caller.
   if [ -d "$_cq_dir" ]; then
     _cq_tmp=''
-    # A mktemp failure (e.g. full /tmp) stays fail-soft like a failed scan:
-    # report the depth as unavailable instead of aborting startup under set -e.
-    if _cq_tmp=$(mktemp) && run_interruptible scan_queue_files "$_cq_dir" "$_cq_tmp"; then
-      # The wc read stays fail-soft like the scan: an I/O error or a
-      # disappearing temp file reports the depth as unavailable instead of
-      # aborting PID 1 under set -e before Postfix starts.
-      if ! _queue_count=$(wc -l <"$_cq_tmp"); then
-        _queue_count=0
-        _queue_ok=false
-        printf 'level=warn msg="queue depth unavailable" queue=%s\n' "$_cq_name" >&2
-      fi
-    else
+    # Every step of the telemetry pipeline stays fail-soft: a mktemp failure
+    # (e.g. full /tmp), a failed or timed-out scan, and a failed wc read (an
+    # I/O error or a disappearing temp file) all report the depth as
+    # unavailable instead of aborting PID 1 under set -e before Postfix
+    # starts. The && chain short-circuits exactly like the old nested ifs:
+    # a failed step skips the rest, and any failure lands in the one warn.
+    if ! { _cq_tmp=$(mktemp) && run_interruptible scan_queue_files "$_cq_dir" "$_cq_tmp" \
+      && _queue_count=$(wc -l <"$_cq_tmp"); }; then
+      _queue_count=0
       _queue_ok=false
       printf 'level=warn msg="queue depth unavailable" queue=%s\n' "$_cq_name" >&2
     fi

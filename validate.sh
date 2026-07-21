@@ -94,6 +94,15 @@ validate_ipv6_cidr() {
       printf 'level=warn msg="IPv6 network entry contains multiple / separators; Postfix will log a bad net/mask pattern and this network will never match" network="%s"\n' \
         "$(sanitize_token "$_net")" >&2
       ;;
+    *[!0-9a-fA-F:.]*)
+      # Postfix expands $name in main.cf parameter values (postconf(5)), so a
+      # non-address character (e.g. $) is rewritten by config-parameter
+      # expansion before the net/mask parse; either way the rendered entry is
+      # a bad net/mask pattern that never matches, silently excluding the
+      # intended LAN. Warn-only, matching the multi-slash arm's posture.
+      printf 'level=warn msg="IPv6 network entry contains characters invalid in an IPv6 address; this network will never match (a $ is expanded as a Postfix config parameter)" network="%s"\n' \
+        "$(sanitize_token "$_net")" >&2
+      ;;
   esac
 }
 
