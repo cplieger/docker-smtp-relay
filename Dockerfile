@@ -188,7 +188,17 @@ RUN { wget --tries=3 --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz" \
       || { printf '%s\n' 'FAIL: $queue_directory/maildrop entry missing from /out/etc/postfix/postfix-files' >&2; exit 1; }; } \
     && chown postfix /out/var/spool/postfix/* /out/var/lib/postfix \
     && chown root:postfix /out/var/spool/postfix/pid \
-    && chgrp postdrop /out/var/spool/postfix/maildrop /out/var/spool/postfix/public
+    && chgrp postdrop /out/var/spool/postfix/maildrop /out/var/spool/postfix/public \
+    # Embed a minimal CycloneDX component document naming the source-built
+    # Postfix. It ships as loose staged files (no apk package), so Syft's
+    # default image catalogers record the files but no package identity; the
+    # sbom-cataloger (enabled via the repo-root .syft.yaml) imports this
+    # document, so the signed release SBOM carries name/version/purl and
+    # future Postfix advisories can be matched against shipped images.
+    && mkdir -p /out/usr/share/sbom \
+    && printf '{"bomFormat":"CycloneDX","specVersion":"1.5","version":1,"components":[{"type":"application","name":"postfix","version":"%s","purl":"pkg:generic/postfix@%s"}]}\n' \
+        "${POSTFIX_VERSION#v}" "${POSTFIX_VERSION#v}" \
+        >/out/usr/share/sbom/postfix.cdx.json
 
 # ---------------------------------------------------------------------------
 # Runtime base stage - digest-pinned base plus unpinned runtime libraries,
@@ -229,6 +239,9 @@ COPY --from=builder /out/usr/lib/postfix/ /usr/lib/postfix/
 COPY --from=builder /out/usr/sbin/ /usr/sbin/
 COPY --from=builder /out/etc/postfix/ /etc/postfix/
 COPY --from=builder /out/var/spool/postfix/ /var/spool/postfix/
+# The embedded Postfix SBOM component (see the builder stage) rides along so
+# Syft's sbom-cataloger can identify the source-built Postfix version.
+COPY --from=builder /out/usr/share/sbom/ /usr/share/sbom/
 
 # newaliases/mailq are hard links to sendmail in the upstream install; COPY
 # would materialize them as two extra full copies, so recreate the links the

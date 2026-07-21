@@ -400,11 +400,13 @@ render_config() {
 # stop grace, drawing a SIGKILL before any abort line is logged.
 # run_interruptible backgrounds the operation and blocks in `wait`, which IS
 # interruptible: the signal handler runs immediately, TERMs and reaps the
-# recorded child via terminate_startup_child, and exits promptly. Function
-# wrappers exec their external command so the recorded PID names the real
-# operation; the probe wrapper deliberately keeps its QUIT pipeline (see
-# probe_relay_tcp), so there the TERM lands on the wrapper shell and the
-# timeout-bounded pipeline children exit on their own deadline.
+# recorded child via terminate_startup_child, and exits promptly. Bounded
+# operations (run_bounded, postmap_restricted, scan_queue_files) record the
+# timeout supervisor as the child; its own TERM handling also terminates its
+# command, so the TERM still stops the real operation. The probe wrapper
+# deliberately keeps its QUIT pipeline (see probe_relay_tcp), so there the
+# TERM lands on the wrapper shell and the timeout-bounded pipeline children
+# exit on their own deadline.
 # ---------------------------------------------------------------------------
 STARTUP_CHILD_PID=''
 
@@ -431,6 +433,34 @@ terminate_startup_child() {
   fi
 }
 
+# Elapsed-time budget for the finite external startup operations (postmap,
+# newaliases, postfix check, postfix set-permissions). run_interruptible
+# makes signal delivery prompt but has no deadline of its own; without one, a
+# wedged or persistently slow spool/config filesystem would hold PID 1 in
+# startup forever and the container would never reach Postfix. 30s is
+# generous for a healthy system while keeping startup bounded on a
+# pathological one; timeout KILLs 5s after its TERM if the command ignores it.
+readonly STARTUP_CMD_TIMEOUT=30
+
+# run_bounded CMD [ARGS...] — run a finite external startup operation through
+# run_interruptible under the elapsed-time budget above. The recorded startup
+# child is the timeout supervisor, whose own TERM handling also terminates
+# its command, so terminate_startup_child still stops the real operation.
+# The exit status is preserved for the caller; 124 means the budget elapsed.
+run_bounded() {
+  run_interruptible timeout -k 5 "$STARTUP_CMD_TIMEOUT" "$@"
+}
+
+# timeout_log_fields STATUS — emit the structured timeout log fields when
+# STATUS is 124 (timeout's elapsed-budget exit code); empty otherwise. Lets
+# a caller's failure log distinguish a timed-out operation from a plain
+# failure without duplicating the fields at every call site.
+timeout_log_fields() {
+  if [ "$1" -eq 124 ]; then
+    printf ' reason=timeout timeout_seconds=%d' "$STARTUP_CMD_TIMEOUT"
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # write_sasl_secret — write the plaintext sasl_passwd, hash it with postmap,
 # then remove the plaintext. Run-mode only (writes a secret to disk).
@@ -440,11 +470,13 @@ cleanup_sasl_plaintext() { rm -f "$SASL_PASSWD_FILE"; }
 # postmap_restricted — postmap under a restrictive umask so the newly created
 # map file is 0600. Runs as a run_interruptible background child, which is a
 # subshell, so the umask never leaks into the main shell. exec replaces the
-# wrapper with postmap itself so the recorded PID names the real operation
-# (terminate_startup_child TERMs postmap, not an intermediate shell).
+# wrapper with the timeout supervisor bounding postmap (run_bounded's budget;
+# the umask must be set in this subshell, so the timeout cannot come from
+# run_bounded itself), so the recorded PID names the supervisor, whose TERM
+# handling also terminates postmap itself.
 postmap_restricted() {
   umask 077
-  exec postmap "$1"
+  exec timeout -k 5 "$STARTUP_CMD_TIMEOUT" postmap "$1"
 }
 
 # On a terminating signal (e.g. Docker sending SIGTERM during a stop), remove
@@ -492,8 +524,10 @@ write_sasl_secret() {
   # verbatim. Remove any pre-existing map first so the umask controls the
   # recreated file.
   rm -f "${SASL_PASSWD_FILE}.db" "${SASL_PASSWD_FILE}.lmdb"
-  if ! run_interruptible postmap_restricted "$SASL_PASSWD_FILE"; then
-    printf 'level=error msg="postmap failed"\n' >&2
+  _postmap_status=0
+  run_interruptible postmap_restricted "$SASL_PASSWD_FILE" || _postmap_status=$?
+  if [ "$_postmap_status" -ne 0 ]; then
+    printf 'level=error msg="postmap failed"%s\n' "$(timeout_log_fields "$_postmap_status")" >&2
     exit 1
   fi
   # Belt-and-suspenders: tighten the regenerated map to 0600 regardless of
@@ -514,15 +548,24 @@ write_sasl_secret() {
 # run_postfix_checks — alias DB, config check, and permission fixup.
 # ---------------------------------------------------------------------------
 run_postfix_checks() {
-  if ! run_interruptible newaliases; then
-    printf 'level=warn msg="newaliases failed; continuing without alias database"\n' >&2
+  _rpc_status=0
+  run_bounded newaliases || _rpc_status=$?
+  if [ "$_rpc_status" -ne 0 ]; then
+    printf 'level=warn msg="newaliases failed; continuing without alias database"%s\n' \
+      "$(timeout_log_fields "$_rpc_status")" >&2
   fi
-  if ! run_interruptible postfix check; then
-    printf 'level=error msg="postfix config check failed"\n' >&2
+  _rpc_status=0
+  run_bounded postfix check || _rpc_status=$?
+  if [ "$_rpc_status" -ne 0 ]; then
+    printf 'level=error msg="postfix config check failed"%s\n' \
+      "$(timeout_log_fields "$_rpc_status")" >&2
     exit 1
   fi
-  if ! run_interruptible postfix set-permissions; then
-    printf 'level=error msg="postfix set-permissions failed; refusing to start"\n' >&2
+  _rpc_status=0
+  run_bounded postfix set-permissions || _rpc_status=$?
+  if [ "$_rpc_status" -ne 0 ]; then
+    printf 'level=error msg="postfix set-permissions failed; refusing to start"%s\n' \
+      "$(timeout_log_fields "$_rpc_status")" >&2
     exit 1
   fi
 }

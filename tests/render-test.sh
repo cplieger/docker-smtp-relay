@@ -62,7 +62,12 @@ check_ok() {
       printf 'FAIL %s: recipient_access differs from golden\n' "$_name" >&2
       _ok=0
     fi
-  elif [ "$RECORD" != "1" ] && [ -f "$GOLDEN_DIR/$_name.recipient_access" ]; then
+  elif [ "$RECORD" = "1" ]; then
+    # Keep regeneration symmetric: a golden case that no longer produces the
+    # optional recipient_access artifact must have its obsolete fixture
+    # removed, or the very next normal run fails on the stale file.
+    rm -f "$GOLDEN_DIR/$_name.recipient_access"
+  elif [ -f "$GOLDEN_DIR/$_name.recipient_access" ]; then
     printf 'FAIL %s: golden recipient_access exists but render produced none\n' "$_name" >&2
     _ok=0
   fi
