@@ -147,6 +147,14 @@ check_fail bad-network-trailing-dot 2 \
   RELAY_HOST=smtp.example.com \
   ACCEPTED_NETWORKS=192.168.1.2./24
 
+check_fail ipv6-multi-slash 2 \
+  RELAY_HOST=smtp.example.com \
+  "ACCEPTED_NETWORKS=192.168.0.0/16 fd00::/8/9"
+
+check_fail networks-whitespace 2 \
+  RELAY_HOST=smtp.example.com \
+  "ACCEPTED_NETWORKS= "
+
 check_fail sasl-cleartext 2 \
   RELAY_HOST=smtp.example.com \
   RELAY_LOGIN=user \
@@ -168,6 +176,10 @@ check_fail recipients-carriage-return 2 \
 check_fail recipients-empty-regex 2 \
   RELAY_HOST=smtp.example.com \
   "RECIPIENT_RESTRICTIONS=//"
+
+check_fail recipients-slash-leading-regex 2 \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=///"
 
 check_fail bad-tls-level 2 \
   RELAY_HOST=smtp.example.com \

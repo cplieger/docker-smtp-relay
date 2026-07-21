@@ -200,6 +200,20 @@ validate_relay_acceptance() {
     printf 'level=error msg="ACCEPTED_NETWORKS is empty"\n' >&2
     exit 2
   fi
+  # A non-empty whitespace-only value bypasses the empty check above but
+  # parses to zero entries: validate_no_open_relay iterates nothing and
+  # succeeds, and the rendered mynetworks contains only 127.0.0.0/8 and
+  # [::1]/128 -- silently excluding every intended LAN while validation and
+  # the healthcheck stay green. Fatal, mirroring the RECIPIENT_RESTRICTIONS
+  # zero-token rejection. (An UNSET ACCEPTED_NETWORKS never reaches here:
+  # apply_defaults gives it the RFC 1918 default.)
+  case "$ACCEPTED_NETWORKS" in
+    *[![:space:]]*) ;;
+    *)
+      printf 'level=error msg="ACCEPTED_NETWORKS is non-empty but contains no network entries (whitespace only?); refusing to render a localhost-only mynetworks"\n' >&2
+      exit 2
+      ;;
+  esac
   validate_no_open_relay "$ACCEPTED_NETWORKS" || exit 2
 
   # Reject cleartext TLS when SASL credentials are configured — sending

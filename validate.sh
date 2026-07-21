@@ -93,9 +93,9 @@ validate_ipv6_cidr() {
   # trailing /9 becomes the prefix and the address part keeps /8, so
   # compute_mynetworks renders [fd00::/8]/9 -- Postfix logs a "bad
   # net/mask pattern" warning and the entry never matches, silently
-  # excluding the operator's IPv6 LAN. The IPv4 arm rejects the same
-  # shape (the embedded / makes an octet non-numeric). Warn-only:
-  # rejecting it would be a config-acceptance change.
+  # excluding the operator's IPv6 LAN. Fatal, restoring parity with the
+  # IPv4 arm, which rejects the same shape (the embedded / makes an
+  # octet non-numeric).
   # Postfix mynetworks format allows an already-bracketed IPv6 entry
   # ([fd00::]/8, per postconf(5)); compute_mynetworks passes it through
   # verbatim, so it is a valid, matching shape. Strip the brackets before
@@ -110,15 +110,17 @@ validate_ipv6_cidr() {
   esac
   case "$_v6_addr" in
     */*)
-      printf 'level=warn msg="IPv6 network entry contains multiple / separators; Postfix will log a bad net/mask pattern and this network will never match" network="%s"\n' \
+      printf 'level=error msg="IPv6 network entry contains multiple / separators; Postfix would log a bad net/mask pattern and this network would never match, silently excluding the intended LAN" network="%s"\n' \
         "$(sanitize_token "$_net")" >&2
+      return 1
       ;;
     *[!0-9a-fA-F:.]*)
       # Postfix expands $name in main.cf parameter values (postconf(5)), so a
       # non-address character (e.g. $) is rewritten by config-parameter
       # expansion before the net/mask parse; either way the rendered entry is
       # a bad net/mask pattern that never matches, silently excluding the
-      # intended LAN. Warn-only, matching the multi-slash arm's posture.
+      # intended LAN. Warn-only: rejecting it would be a config-acceptance
+      # change (the multi-slash arm above is fatal by explicit user decision).
       printf 'level=warn msg="IPv6 network entry contains characters invalid in an IPv6 address; this network will never match (a $ is expanded as a Postfix config parameter)" network="%s"\n' \
         "$(sanitize_token "$_net")" >&2
       ;;

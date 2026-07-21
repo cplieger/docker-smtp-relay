@@ -36,17 +36,23 @@ emit_rcpt_line() {
 emit_regexp_recipient_rule() {
   _rcpt_pat=${1#/}
   _rcpt_pat=${_rcpt_pat%/}
-  # An empty pattern (an entry of exactly `//`) compiles as a POSIX ERE that
-  # matches every string, so the rendered rule would allow ALL recipients
-  # before the /.*/ REJECT terminator — the operator configured a restriction
-  # and silently got allow-all. Fatal, matching the zero-rules guard's posture
-  # of refusing to render a map that allows or rejects all mail.
-  if [ -z "$_rcpt_pat" ]; then
-    printf 'level=error msg="recipient restriction regex is empty and would match all recipients; refusing to allow all mail" entry="%s"\n' \
-      "$(sanitize_token "$1")" >&2
-    rm -f "$_rcpt_tmp"
-    exit 2
-  fi
+  # Postfix's dict_regexp ends the pattern at the FIRST unescaped /, so any
+  # entry beginning with // (//, ///, //foo/) has an EMPTY effective pattern
+  # even when the shell strip above leaves text. An empty pattern compiles as
+  # a POSIX ERE that matches every string, so the rendered rule would allow
+  # ALL recipients before the /.*/ REJECT terminator (or dict_regexp drops
+  # the line as bad flags and matching mail is rejected) — the operator
+  # configured a restriction and silently got allow-all or reject-all. Fatal,
+  # matching the zero-rules guard's posture of refusing to render a map that
+  # allows or rejects all mail.
+  case "$1" in
+    //*)
+      printf 'level=error msg="recipient restriction regex is empty (Postfix ends the pattern at the first unescaped /) and would match all recipients; refusing to allow all mail" entry="%s"\n' \
+        "$(sanitize_token "$1")" >&2
+      rm -f "$_rcpt_tmp"
+      exit 2
+      ;;
+  esac
   _rcpt_grc=0
   printf '' | grep -E -e "$_rcpt_pat" >/dev/null 2>&1 || _rcpt_grc=$?
   if [ "$_rcpt_grc" -gt 1 ]; then
