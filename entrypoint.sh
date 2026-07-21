@@ -446,19 +446,23 @@ readonly STARTUP_CMD_TIMEOUT=30
 # run_interruptible under the elapsed-time budget above. The recorded startup
 # child is the timeout supervisor, whose own TERM handling also terminates
 # its command, so terminate_startup_child still stops the real operation.
-# The exit status is preserved for the caller; 124 means the budget elapsed.
+# The exit status is preserved for the caller; BusyBox timeout reports an
+# elapsed budget as 143 (TERM) or 137 (KILL after the -k grace).
 run_bounded() {
   run_interruptible timeout -k 5 "$STARTUP_CMD_TIMEOUT" "$@"
 }
 
 # timeout_log_fields STATUS — emit the structured timeout log fields when
-# STATUS is 124 (timeout's elapsed-budget exit code); empty otherwise. Lets
-# a caller's failure log distinguish a timed-out operation from a plain
-# failure without duplicating the fields at every call site.
+# STATUS indicates the elapsed budget; empty otherwise. BusyBox timeout (the
+# only timeout in the runtime image) exits 143 (128+TERM) on expiry, or 137
+# (128+KILL) when the command ignored the TERM and the -k grace elapsed;
+# coreutils' 124 is accepted too for portability. Lets a caller's failure
+# log distinguish a timed-out operation from a plain failure without
+# duplicating the fields at every call site.
 timeout_log_fields() {
-  if [ "$1" -eq 124 ]; then
-    printf ' reason=timeout timeout_seconds=%d' "$STARTUP_CMD_TIMEOUT"
-  fi
+  case "$1" in
+    124|137|143) printf ' reason=timeout timeout_seconds=%d' "$STARTUP_CMD_TIMEOUT" ;;
+  esac
 }
 
 # ---------------------------------------------------------------------------
