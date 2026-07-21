@@ -184,6 +184,15 @@ escalation. Postfix drops privileges internally.
 **Details for advanced users:** Recipient filtering uses properly
 escaped regex patterns.
 
+**Network exposure:** the example compose maps `25:25`, which binds
+the SMTP listener on all host interfaces. `ACCEPTED_NETWORKS` is
+relay authorization — it decides who may send mail through the relay,
+not who can reach the listener — so it does not stop Internet
+scanners from connecting to and exercising Postfix's SMTP parser. On
+a host with a WAN-facing interface, bind a specific LAN address
+instead (for example `ports: ["192.168.1.10:25:25"]`) and/or firewall
+TCP/25 to trusted source subnets.
+
 ## Dependencies
 
 All dependencies are updated automatically via [Renovate](https://github.com/renovatebot/renovate). The base image is pinned by SHA digest, and Postfix is pinned by version + SHA-256 and built from the upstream source tarball with feature parity to the Alpine `postfix` package (TLS, Cyrus SASL client auth, PCRE2, LMDB as the default map type, SMTPUTF8). The SASL runtime packages and shared libraries are installed unpinned so they track the digest-pinned base userland.
