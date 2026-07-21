@@ -633,7 +633,18 @@ run_postfix_checks() {
 # start-period (max 10 + 2 = 12s; a TERM-ignoring nc is KILLed 2s
 # later, still under 15s).
 probe_relay_tcp() {
-  printf 'QUIT\r\n' | timeout -k 2 "$((STARTUP_PROBE_TIMEOUT + 2))" nc -w "$STARTUP_PROBE_TIMEOUT" "$1" "$2" >/dev/null 2>&1
+  # STARTUP_PROBE_TIMEOUT is range-validated (1-10) but the validation does
+  # not canonicalize the representation: a leading-zero value (08, 09) is
+  # read as octal by POSIX shell arithmetic and errors out, which would make
+  # the fail-soft wrapper report a false "unreachable". Strip leading zeroes
+  # before the value enters $((...)). The validated range makes an all-zero
+  # value impossible; the :-0 fallback is purely defensive.
+  _probe_timeout=$STARTUP_PROBE_TIMEOUT
+  while [ "${_probe_timeout#0}" != "$_probe_timeout" ]; do
+    _probe_timeout=${_probe_timeout#0}
+  done
+  _probe_timeout=${_probe_timeout:-0}
+  printf 'QUIT\r\n' | timeout -k 2 "$((_probe_timeout + 2))" nc -w "$_probe_timeout" "$1" "$2" >/dev/null 2>&1
 }
 
 probe_upstream() {
