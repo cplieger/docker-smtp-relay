@@ -82,6 +82,19 @@ validate_ipv6_cidr() {
     printf 'level=error msg="IPv6 prefix out of range" network="%s" prefix=%s\n' "$(sanitize_token "$_net")" "$_prefix" >&2
     return 1
   fi
+  # A second / in the entry (fd00::/8/9) survives the prefix parse: the
+  # trailing /9 becomes the prefix and the address part keeps /8, so
+  # compute_mynetworks renders [fd00::/8]/9 -- Postfix logs a "bad
+  # net/mask pattern" warning and the entry never matches, silently
+  # excluding the operator's IPv6 LAN. The IPv4 arm rejects the same
+  # shape (the embedded / makes an octet non-numeric). Warn-only:
+  # rejecting it would be a config-acceptance change.
+  case "${_net%/*}" in
+    */*)
+      printf 'level=warn msg="IPv6 network entry contains multiple / separators; Postfix will log a bad net/mask pattern and this network will never match" network="%s"\n' \
+        "$(sanitize_token "$_net")" >&2
+      ;;
+  esac
 }
 
 validate_ipv4_cidr() {

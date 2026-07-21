@@ -100,6 +100,10 @@ emit_recipient_rule() {
           printf 'level=warn msg="recipient restriction looks like a mis-typed regexp (a domain cannot contain /); this rule will never match any recipient" entry="%s"\n' \
             "$(sanitize_token "$1")" >&2
           ;;
+        .*)
+          printf 'level=warn msg="recipient restriction domain starts with a dot (Postfix subdomain syntax is not supported by this regexp map; no address contains @.); this rule will never match any recipient" entry="%s"\n' \
+            "$(sanitize_token "$1")" >&2
+          ;;
       esac
       _esc=$(escape_postfix_regex "$1")
       emit_rcpt_line "/@${_esc}\$/ OK"
