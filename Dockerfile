@@ -108,7 +108,7 @@ RUN { wget --tries=3 --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz" \
         "http://ftp.porcupine.org/mirrors/postfix-release/official/postfix-${POSTFIX_VERSION#v}.tar.gz.gpg2"; } \
     && gpgv --keyring /usr/local/share/postfix-release.gpg \
         "postfix-${POSTFIX_VERSION#v}.tar.gz.gpg2" "postfix-${POSTFIX_VERSION#v}.tar.gz" \
-    && echo "${POSTFIX_SHA256}  postfix-${POSTFIX_VERSION#v}.tar.gz" | sha256sum -c - \
+    && printf '%s  %s\n' "$POSTFIX_SHA256" "postfix-${POSTFIX_VERSION#v}.tar.gz" | sha256sum -c - \
     && tar xzf "postfix-${POSTFIX_VERSION#v}.tar.gz" --strip-components=1 --no-same-owner \
     && rm "postfix-${POSTFIX_VERSION#v}.tar.gz" "postfix-${POSTFIX_VERSION#v}.tar.gz.gpg2" \
     && sed -i -e 's|#define HAS_NIS|//#define HAS_NIS|g' \

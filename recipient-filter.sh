@@ -26,6 +26,87 @@ emit_rcpt_line() {
   fi
 }
 
+# emit_regexp_recipient_rule ENTRY — render one /.../ regexp-literal token.
+# Test-compiles the pattern with grep -E (musl regcomp, the same regex engine
+# Postfix's regexp: tables link against in this image). dict_regexp ignores an
+# uncompilable line at map-open time with only a maillog warning, so the
+# intended allow rule silently vanishes and the /.*/ REJECT terminator rejects
+# that mail; surface it at deploy time. grep exit >1 = bad pattern (0/1 =
+# pattern compiled). Log-only: never rejects the config.
+emit_regexp_recipient_rule() {
+  _rcpt_pat=${1#/}
+  _rcpt_pat=${_rcpt_pat%/}
+  # An empty pattern (an entry of exactly `//`) compiles as a POSIX ERE that
+  # matches every string, so the rendered rule would allow ALL recipients
+  # before the /.*/ REJECT terminator — the operator configured a restriction
+  # and silently got allow-all. Fatal, matching the zero-rules guard's posture
+  # of refusing to render a map that allows or rejects all mail.
+  if [ -z "$_rcpt_pat" ]; then
+    printf 'level=error msg="recipient restriction regex is empty and would match all recipients; refusing to allow all mail" entry="%s"\n' \
+      "$(sanitize_token "$1")" >&2
+    rm -f "$_rcpt_tmp"
+    exit 2
+  fi
+  _rcpt_grc=0
+  printf '' | grep -E -e "$_rcpt_pat" >/dev/null 2>&1 || _rcpt_grc=$?
+  if [ "$_rcpt_grc" -gt 1 ]; then
+    printf 'level=warn msg="recipient restriction regex does not compile; Postfix will ignore this rule and matching recipients will be rejected" pattern="%s"\n' \
+      "$(sanitize_token "$_rcpt_pat")" >&2
+  fi
+  # The grep compile check cannot see the delimiter contract: an unescaped /
+  # inside the pattern (e.g. /a/b/) is a valid ERE but terminates the Postfix
+  # regexp-table pattern early, so dict_regexp drops the whole line at
+  # map-open with only a maillog warning. Strip backslash escapes first; any
+  # / left is an unescaped delimiter (escape_postfix_regex escapes / for
+  # exactly this reason in the literal arms).
+  case "$(printf '%s' "$_rcpt_pat" | sed 's#\\.##g')" in
+    */*)
+      printf 'level=warn msg="recipient restriction regex contains an unescaped /; Postfix parses / as the pattern delimiter and will ignore this rule" pattern="%s"\n' \
+        "$(sanitize_token "$_rcpt_pat")" >&2
+      ;;
+  esac
+  emit_rcpt_line "$1 OK"
+}
+
+# emit_recipient_rule ENTRY — classify one RECIPIENT_RESTRICTIONS token
+# (regexp literal, full address, or domain) and append its rendered rule via
+# emit_rcpt_line. Shares the _rcpt_tmp contract with build_recipient_filter:
+# fatal branches remove the temp file and exit 2.
+emit_recipient_rule() {
+  case "$1" in
+    *[[:space:]]*)
+      # Word splitting already consumed spaces, tabs, and line feeds, so
+      # residual whitespace here is CR/FF/VT — it would render a rule no
+      # real recipient matches, silently rejecting all mail.
+      printf 'level=error msg="recipient restriction contains invalid whitespace"\n' >&2
+      rm -f "$_rcpt_tmp"
+      exit 2
+      ;;
+    /*/) # already a Postfix regexp literal
+      emit_regexp_recipient_rule "$1"
+      ;;
+    *@*) # full address: anchor both ends
+      _esc=$(escape_postfix_regex "$1")
+      emit_rcpt_line "/^${_esc}\$/ OK"
+      ;;
+    *) # domain-only: anchor the @-suffix
+      # A domain can never contain a slash, so a slash-bearing token here
+      # is almost certainly a mis-typed regexp literal (e.g. `/foo`
+      # missing its closing delimiter). The escaped rule compiles but can
+      # never match a real recipient; surface that at deploy time.
+      # Warn-only: rejecting it would be a config-acceptance change.
+      case "$1" in
+        */*)
+          printf 'level=warn msg="recipient restriction looks like a mis-typed regexp (a domain cannot contain /); this rule will never match any recipient" entry="%s"\n' \
+            "$(sanitize_token "$1")" >&2
+          ;;
+      esac
+      _esc=$(escape_postfix_regex "$1")
+      emit_rcpt_line "/@${_esc}\$/ OK"
+      ;;
+  esac
+}
+
 # build_recipient_filter — builds /etc/postfix/recipient_access from
 # RECIPIENT_RESTRICTIONS tokens and sets SMTPD_RECIPIENT_RESTRICTIONS.
 # Must be called (not subshelled) so the variable is visible to the caller.
@@ -44,78 +125,7 @@ build_recipient_filter() {
     fi
     _rule_count=0
     for _entry in $RECIPIENT_RESTRICTIONS; do
-      case "$_entry" in
-        *[[:space:]]*)
-          # Word splitting already consumed spaces, tabs, and line feeds, so
-          # residual whitespace here is CR/FF/VT — it would render a rule no
-          # real recipient matches, silently rejecting all mail.
-          printf 'level=error msg="recipient restriction contains invalid whitespace"\n' >&2
-          rm -f "$_rcpt_tmp"
-          exit 2
-          ;;
-        /*/) # already a Postfix regexp literal
-          # Test-compile the pattern with grep -E (musl regcomp, the same
-          # regex engine Postfix's regexp: tables link against in this
-          # image). dict_regexp ignores an uncompilable line at map-open
-          # time with only a maillog warning, so the intended allow rule
-          # silently vanishes and the /.*/ REJECT terminator rejects that
-          # mail; surface it at deploy time. grep exit >1 = bad pattern
-          # (0/1 = pattern compiled). Log-only: never rejects the config.
-          _rcpt_pat=${_entry#/}
-          _rcpt_pat=${_rcpt_pat%/}
-          # An empty pattern (an entry of exactly `//`) compiles as a POSIX
-          # ERE that matches every string, so the rendered rule would allow
-          # ALL recipients before the /.*/ REJECT terminator — the operator
-          # configured a restriction and silently got allow-all. Fatal,
-          # matching the zero-rules guard's posture of refusing to render a
-          # map that allows or rejects all mail.
-          if [ -z "$_rcpt_pat" ]; then
-            printf 'level=error msg="recipient restriction regex is empty and would match all recipients; refusing to allow all mail" entry="%s"\n' \
-              "$(sanitize_token "$_entry")" >&2
-            rm -f "$_rcpt_tmp"
-            exit 2
-          fi
-          _rcpt_grc=0
-          printf '' | grep -E -e "$_rcpt_pat" >/dev/null 2>&1 || _rcpt_grc=$?
-          if [ "$_rcpt_grc" -gt 1 ]; then
-            printf 'level=warn msg="recipient restriction regex does not compile; Postfix will ignore this rule and matching recipients will be rejected" pattern="%s"\n' \
-              "$(sanitize_token "$_rcpt_pat")" >&2
-          fi
-          # The grep compile check cannot see the delimiter contract: an
-          # unescaped / inside the pattern (e.g. /a/b/) is a valid ERE but
-          # terminates the Postfix regexp-table pattern early, so dict_regexp
-          # drops the whole line at map-open with only a maillog warning.
-          # Strip backslash escapes first; any / left is an unescaped
-          # delimiter (escape_postfix_regex escapes / for exactly this
-          # reason in the literal arms).
-          case "$(printf '%s' "$_rcpt_pat" | sed 's#\\.##g')" in
-            */*)
-              printf 'level=warn msg="recipient restriction regex contains an unescaped /; Postfix parses / as the pattern delimiter and will ignore this rule" pattern="%s"\n' \
-                "$(sanitize_token "$_rcpt_pat")" >&2
-              ;;
-          esac
-          emit_rcpt_line "$_entry OK"
-          ;;
-        *@*) # full address: anchor both ends
-          _esc=$(escape_postfix_regex "$_entry")
-          emit_rcpt_line "/^${_esc}\$/ OK"
-          ;;
-        *) # domain-only: anchor the @-suffix
-          # A domain can never contain a slash, so a slash-bearing token here
-          # is almost certainly a mis-typed regexp literal (e.g. `/foo`
-          # missing its closing delimiter). The escaped rule compiles but can
-          # never match a real recipient; surface that at deploy time.
-          # Warn-only: rejecting it would be a config-acceptance change.
-          case "$_entry" in
-            */*)
-              printf 'level=warn msg="recipient restriction looks like a mis-typed regexp (a domain cannot contain /); this rule will never match any recipient" entry="%s"\n' \
-                "$(sanitize_token "$_entry")" >&2
-              ;;
-          esac
-          _esc=$(escape_postfix_regex "$_entry")
-          emit_rcpt_line "/@${_esc}\$/ OK"
-          ;;
-      esac
+      emit_recipient_rule "$_entry"
       _rule_count=$((_rule_count + 1))
     done
     # Refuse to proceed if a non-empty RECIPIENT_RESTRICTIONS parses to zero

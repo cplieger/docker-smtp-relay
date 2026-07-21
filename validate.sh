@@ -118,6 +118,12 @@ validate_ipv4_cidr() {
         return 1
         ;;
     esac
+    # Same length guard as validate_numeric: beyond LONG_MAX test(1) aborts
+    # with a diagnostic, and the `if` swallows the failure as "in range".
+    if [ "${#_oct}" -gt 18 ]; then
+      printf 'level=error msg="IPv4 octet too large" network="%s" length=%d\n' "$(sanitize_token "$_net")" "${#_oct}" >&2
+      return 1
+    fi
     if [ "$_oct" -gt 255 ]; then
       printf 'level=error msg="IPv4 octet out of range" network="%s" octet=%s\n' "$(sanitize_token "$_net")" "$_oct" >&2
       return 1
@@ -145,6 +151,12 @@ validate_no_open_relay() {
         return 1
         ;;
     esac
+    # Same length guard as validate_numeric: beyond LONG_MAX test(1) aborts
+    # with a diagnostic, and the `if` swallows the failure as "in range".
+    if [ "${#_prefix}" -gt 18 ]; then
+      printf 'level=error msg="network CIDR prefix too large" network="%s" length=%d\n' "$(sanitize_token "$_net")" "${#_prefix}" >&2
+      return 1
+    fi
     if [ "$_prefix" -lt 8 ]; then
       printf 'level=error msg="network CIDR too broad (min /8)" network="%s" prefix=%s\n' "$(sanitize_token "$_net")" "$_prefix" >&2
       return 1
