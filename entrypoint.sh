@@ -99,6 +99,21 @@ apply_defaults() {
 # fire after the ACCEPTED_NETWORKS checks).
 # ---------------------------------------------------------------------------
 
+# validate_field_check VAR VALUE CHECK — run one spec-table check. Omitting
+# a default arm preserves the interpreter's no-op behavior for an unknown
+# check token.
+validate_field_check() {
+  case "$3" in
+    nl) validate_no_newlines "$1" "$2" ;;
+    num) validate_numeric "$1" "$2" ;;
+    meta) validate_no_metacharacters "$1" "$2" ;;
+    range=*)
+      _vfc_range="${3#range=}"
+      validate_range "$1" "$2" "${_vfc_range%%:*}" "${_vfc_range#*:}"
+      ;;
+  esac
+}
+
 # validate_declared_fields — the generic spec-table interpreter, the
 # field-specific validators not expressible in the table, and the
 # required-variable check.
@@ -143,17 +158,7 @@ STARTUP_PROBE_TIMEOUT:nl,num,range=1:10
     IFS=,
     for _chk in $_checks; do
       IFS=$_oldIFS
-      case "$_chk" in
-        nl) validate_no_newlines "$_var" "$_value" || exit 2 ;;
-        num) validate_numeric "$_var" "$_value" || exit 2 ;;
-        meta) validate_no_metacharacters "$_var" "$_value" || exit 2 ;;
-        range=*)
-          _range="${_chk#range=}"
-          _min="${_range%%:*}"
-          _max="${_range#*:}"
-          validate_range "$_var" "$_value" "$_min" "$_max" || exit 2
-          ;;
-      esac
+      validate_field_check "$_var" "$_value" "$_chk" || exit 2
     done
     IFS=$_oldIFS
   done
