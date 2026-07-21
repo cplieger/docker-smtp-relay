@@ -89,7 +89,19 @@ validate_ipv6_cidr() {
   # excluding the operator's IPv6 LAN. The IPv4 arm rejects the same
   # shape (the embedded / makes an octet non-numeric). Warn-only:
   # rejecting it would be a config-acceptance change.
-  case "${_net%/*}" in
+  # Postfix mynetworks format allows an already-bracketed IPv6 entry
+  # ([fd00::]/8, per postconf(5)); compute_mynetworks passes it through
+  # verbatim, so it is a valid, matching shape. Strip the brackets before
+  # the shape checks so the invalid-character arm does not false-warn
+  # "never match" on it; the inner address still gets the check.
+  _v6_addr="${_net%/*}"
+  case "$_v6_addr" in
+    \[*\])
+      _v6_addr="${_v6_addr#\[}"
+      _v6_addr="${_v6_addr%\]}"
+      ;;
+  esac
+  case "$_v6_addr" in
     */*)
       printf 'level=warn msg="IPv6 network entry contains multiple / separators; Postfix will log a bad net/mask pattern and this network will never match" network="%s"\n' \
         "$(sanitize_token "$_net")" >&2
