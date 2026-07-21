@@ -174,13 +174,14 @@ validate_ipv4_cidr() {
     # Postfix's network parser (inet_pton-based) rejects leading-zero octets
     # at runtime ("bad network value ... skipping this rule", verified against
     # the shipped image), so the entry never matches and the intended LAN is
-    # silently excluded while validation stays green. Warn-only: rejecting it
-    # would be a config-acceptance change (same posture as the IPv6
-    # invalid-character warn above).
+    # silently excluded while validation stays green. Fatal by explicit user
+    # decision (same posture as the IPv6 multi-slash arm), restoring parity
+    # with the other IPv4 shape rejections above.
     case "$_oct" in
       0[0-9]*)
-        printf 'level=warn msg="IPv4 octet has a leading zero; Postfix rejects this network entry at runtime (bad network value) and it will never match, silently excluding the intended LAN" network="%s" octet=%s\n' \
+        printf 'level=error msg="IPv4 octet has a leading zero; Postfix rejects this network entry at runtime (bad network value) and it would never match, silently excluding the intended LAN" network="%s" octet=%s\n' \
           "$(sanitize_token "$_net")" "$_oct" >&2
+        return 1
         ;;
     esac
   done
