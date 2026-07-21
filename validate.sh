@@ -68,6 +68,13 @@ validate_no_metacharacters() {
 
 # Validate that a numeric value falls within [min, max].
 # Usage: validate_range VAR_NAME VALUE MIN MAX
+# Precondition: VALUE has already passed validate_numeric. The spec table in
+# entrypoint.sh orders `num` before `range=` on every row, which is
+# load-bearing twice: a non-numeric or >18-digit value would make both test(1)
+# comparisons error out and the `if` would swallow that as "in range" (see the
+# length-guard comment in validate_numeric), and the raw value="%s"
+# interpolation below is exempt from the no-raw-token logging rule only
+# because the value is guaranteed digits-only here.
 validate_range() {
   if [ "$2" -lt "$3" ] || [ "$2" -gt "$4" ]; then
     printf 'level=error msg="env var out of range" var=%s value="%s" min=%s max=%s\n' "$1" "$2" "$3" "$4" >&2

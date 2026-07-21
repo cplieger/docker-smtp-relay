@@ -123,10 +123,7 @@ build_recipient_filter() {
 
   if [ -n "$RECIPIENT_RESTRICTIONS" ]; then
     _rcpt_file="${CONF_DIR}/recipient_access"
-    if ! _rcpt_tmp=$(mktemp "${_rcpt_file}.XXXXXX"); then
-      printf 'level=error msg="failed to create temporary file for recipient_access" conf_dir="%s"\n' "$(sanitize_token "$CONF_DIR")" >&2
-      exit 1
-    fi
+    _rcpt_tmp=$(create_rendered_tmp "$_rcpt_file" recipient_access) || exit 1
     _rule_count=0
     for _entry in $RECIPIENT_RESTRICTIONS; do
       emit_recipient_rule "$_entry"
