@@ -327,7 +327,8 @@ COPY --from=test /tmp/tests-passed /tmp/tests-passed
 EXPOSE 25
 
 # Run as root (uid:gid 0:0) by default — Postfix master needs root to bind
-# port 25; smtpd workers drop to the postfix user internally via setuid+chroot.
+# port 25; smtpd workers drop to the unprivileged postfix user internally (setuid;
+# the stock upstream master.cf runs all services with chroot=n since Postfix 3.0).
 # This is the image default and can be overridden at run time (e.g. compose
 # `user:`) if you front the relay differently. AVD-DS-0002 is suppressed via
 # .trivyignore at the repo root; see the rationale there.

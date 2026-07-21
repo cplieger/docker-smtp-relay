@@ -92,13 +92,7 @@ build_recipient_filter() {
       exit 2
     fi
     emit_rcpt_line '/.*/ REJECT'
-    # mktemp creates 0600; the map must stay world-readable (smtpd runs as
-    # the postfix user), matching the previous umask-derived 0644.
-    if ! chmod 644 "$_rcpt_tmp" || ! mv "$_rcpt_tmp" "$_rcpt_file"; then
-      printf 'level=error msg="failed to move rendered recipient_access into place" path="%s"\n' "$(sanitize_token "$_rcpt_file")" >&2
-      rm -f "$_rcpt_tmp"
-      exit 1
-    fi
+    promote_rendered_file "$_rcpt_tmp" "$_rcpt_file" recipient_access
     # shellcheck disable=SC2034 # consumed by caller after sourcing
     SMTPD_RECIPIENT_RESTRICTIONS="check_recipient_access regexp:${_rcpt_file}, reject"
     # Count only operator-supplied allow rules; the trailing /.*/ REJECT terminator

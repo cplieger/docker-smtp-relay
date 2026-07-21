@@ -62,6 +62,9 @@ check_ok() {
       printf 'FAIL %s: recipient_access differs from golden\n' "$_name" >&2
       _ok=0
     fi
+  elif [ "$RECORD" != "1" ] && [ -f "$GOLDEN_DIR/$_name.recipient_access" ]; then
+    printf 'FAIL %s: golden recipient_access exists but render produced none\n' "$_name" >&2
+    _ok=0
   fi
 
   if [ "$_ok" = "1" ]; then
@@ -165,6 +168,7 @@ check_fail bad-tls-level 2 \
 check_sanitize() {
   _name=$1
   _got=$(
+    # shellcheck source-path=SCRIPTDIR
     # shellcheck source=../validate.sh
     . "$ENTRYPOINT_DIR/validate.sh"
     sanitize_token "$2"

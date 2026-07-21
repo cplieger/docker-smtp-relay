@@ -43,7 +43,7 @@ readonly MAIN_CF="${CONF_DIR}/main.cf"
 # RELAY_PORT               integer   587                  1-65535
 # RELAY_LOGIN              string    ""                   no whitespace or colons
 # RELAY_PASSWORD           string    ""                   no whitespace
-# RECIPIENT_RESTRICTIONS   string    ""                   space-separated; addresses or /regex/
+# RECIPIENT_RESTRICTIONS   string    ""                   space-separated; addresses, domains, or /regex/
 # SMTP_TLS_SECURITY_LEVEL  enum      secure               one of $TLS_LEVELS (see validate.sh)
 # MESSAGE_SIZE_LIMIT       integer   10240000             max 104857600 (100 MB)
 # SMTP_HOSTNAME            string    smtp-relay.local     FQDN recommended (shape not enforced); no newlines/metacharacters
@@ -300,6 +300,23 @@ compute_sasl_state() {
 }
 
 # ---------------------------------------------------------------------------
+# promote_rendered_file TMP DEST LABEL -- finish an atomic render: chmod the
+# temp file to the world-readable 0644 the Postfix daemons need (mktemp
+# creates 0600), then mv it into place. On failure emit a structured
+# level=error naming LABEL, remove the temp file, and exit 1. Shared by
+# render_main_cf and build_recipient_filter (all three scripts are sourced
+# into one shell, so the caller in recipient-filter.sh resolves this at call
+# time, exactly like its existing sanitize_token calls into validate.sh).
+# ---------------------------------------------------------------------------
+promote_rendered_file() {
+  if ! chmod 644 "$1" || ! mv "$1" "$2"; then
+    printf 'level=error msg="failed to move rendered %s into place" path="%s"\n' "$3" "$(sanitize_token "$2")" >&2
+    rm -f "$1"
+    exit 1
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # render_main_cf — generate $CONF_DIR/main.cf from the computed values.
 # Deterministic text generation only; no side effects beyond the file write.
 # Renders to a mktemp file in CONF_DIR and mv's atomically so a write failure
@@ -354,13 +371,7 @@ EOF
     rm -f "$_main_tmp"
     exit 1
   fi
-  # mktemp creates 0600; main.cf must stay world-readable (Postfix daemons
-  # run as the postfix user), matching the previous umask-derived 0644.
-  if ! chmod 644 "$_main_tmp" || ! mv "$_main_tmp" "$MAIN_CF"; then
-    printf 'level=error msg="failed to move rendered main.cf into place" path="%s"\n' "$(sanitize_token "$MAIN_CF")" >&2
-    rm -f "$_main_tmp"
-    exit 1
-  fi
+  promote_rendered_file "$_main_tmp" "$MAIN_CF" main.cf
 }
 
 # ---------------------------------------------------------------------------
@@ -546,6 +557,17 @@ probe_upstream() {
   # may carry.
   _probe_host="${RELAY_HOST#\[}"
   _probe_host="${_probe_host%\]}"
+
+  # Never let the host land in nc's argv as an option: a dash-leading value
+  # passes the metacharacter checks but would be parsed as an nc flag. The
+  # probe is fail-soft by contract, so skip-with-warn instead of rejecting.
+  case "$_probe_host" in
+    -*)
+      printf 'level=warn msg="startup probe skipped: relay host looks like an option" relay="%s"\n' \
+        "$(sanitize_token "$RELAYHOST_VALUE")" >&2
+      return 0
+      ;;
+  esac
 
   if run_interruptible probe_relay_tcp "$_probe_host" "$RELAY_PORT"; then
     printf 'level=info msg="upstream relay reachable" relay="%s"\n' "$(sanitize_token "$RELAYHOST_VALUE")" >&2
