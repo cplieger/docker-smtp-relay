@@ -84,7 +84,8 @@ emit_recipient_rule() {
       # Word splitting already consumed spaces, tabs, and line feeds, so
       # residual whitespace here is CR/FF/VT — it would render a rule no
       # real recipient matches, silently rejecting all mail.
-      printf 'level=error msg="recipient restriction contains invalid whitespace"\n' >&2
+      printf 'level=error msg="recipient restriction contains invalid whitespace" entry="%s"\n' \
+        "$(sanitize_token "$1")" >&2
       rm -f "$_rcpt_tmp"
       exit 2
       ;;
