@@ -195,19 +195,20 @@ validate_sasl_config() {
 # validate_relay_acceptance — relay-acceptance policy: who we accept mail
 # from, and that credentials never travel a cleartext upstream channel.
 validate_relay_acceptance() {
-  # ACCEPTED_NETWORKS: reject open-relay and overly broad configs
-  if [ -z "$ACCEPTED_NETWORKS" ]; then
-    printf 'level=error msg="ACCEPTED_NETWORKS is empty"\n' >&2
-    exit 2
-  fi
-  # A non-empty whitespace-only value bypasses the empty check above but
-  # parses to zero entries: validate_no_open_relay iterates nothing and
-  # succeeds, and the rendered mynetworks contains only 127.0.0.0/8 and
-  # [::1]/128 -- silently excluding every intended LAN while validation and
-  # the healthcheck stay green. Fatal, mirroring the RECIPIENT_RESTRICTIONS
-  # zero-token rejection. (An UNSET ACCEPTED_NETWORKS never reaches here:
-  # apply_defaults gives it the RFC 1918 default.)
+  # ACCEPTED_NETWORKS: reject open-relay and overly broad configs. One case
+  # covers both degenerate shapes: explicitly empty, and non-empty but
+  # whitespace-only. The whitespace-only value parses to zero entries:
+  # validate_no_open_relay iterates nothing and succeeds, and the rendered
+  # mynetworks contains only 127.0.0.0/8 and [::1]/128 -- silently excluding
+  # every intended LAN while validation and the healthcheck stay green.
+  # Fatal, mirroring the RECIPIENT_RESTRICTIONS zero-token rejection. (An
+  # UNSET ACCEPTED_NETWORKS never reaches here: apply_defaults gives it the
+  # RFC 1918 default.)
   case "$ACCEPTED_NETWORKS" in
+    '')
+      printf 'level=error msg="ACCEPTED_NETWORKS is empty"\n' >&2
+      exit 2
+      ;;
     *[![:space:]]*) ;;
     *)
       printf 'level=error msg="ACCEPTED_NETWORKS is non-empty but contains no network entries (whitespace only?); refusing to render a localhost-only mynetworks"\n' >&2

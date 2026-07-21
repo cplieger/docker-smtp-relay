@@ -209,8 +209,9 @@ validate_no_open_relay() {
     # notice -- wrong octet count (192.168.1/24), out-of-range octets
     # (192.168.1.300/24), or non-numeric octets -- that would silently exclude
     # the intended LAN from relaying. IPv4 requires four dotted octets each
-    # 0-255. IPv6 is detected by `:`
-    # and delegated to Postfix for per-group validation.
+    # 0-255. IPv6 is detected by `:`: validate_ipv6_cidr fatally rejects
+    # multi-slash entries and warns on invalid address characters; per-group
+    # (hextet) validation stays delegated to Postfix.
     _ip="${_net%/*}"
     case "$_ip" in
       *:*) validate_ipv6_cidr "$_net" "$_prefix" || return 1 ;;

@@ -155,6 +155,10 @@ check_fail networks-whitespace 2 \
   RELAY_HOST=smtp.example.com \
   "ACCEPTED_NETWORKS= "
 
+check_fail networks-empty 2 \
+  RELAY_HOST=smtp.example.com \
+  ACCEPTED_NETWORKS=
+
 check_fail sasl-cleartext 2 \
   RELAY_HOST=smtp.example.com \
   RELAY_LOGIN=user \
