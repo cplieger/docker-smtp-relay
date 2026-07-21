@@ -33,4 +33,4 @@ concurrency:
 
 jobs:
   ci:
-    uses: cplieger/ci/.github/workflows/ci.yaml@76744d1976ff3de55228e9005b41669446189103 # v2
+    uses: cplieger/ci/.github/workflows/ci.yaml@8710ca7cedd6800a242cbe82a0df5666f6829ac7 # v2
