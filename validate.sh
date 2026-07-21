@@ -41,6 +41,16 @@ sanitize_token() {
     printf '[truncated]'
   fi
 }
+# Shell integers are compared with test(1), which aborts with "Illegal
+# number" beyond LONG_MAX while an `if` swallows that error as "in range".
+# 18 digits is the widest count that can never exceed LONG_MAX (2^63-1 has
+# 19 digits). Single source of truth for the three length guards below.
+readonly MAX_INT_DIGITS=18
+
+# int_too_wide VALUE -- true when VALUE has more digits than test(1) can
+# compare safely. Callers log their own site-specific context.
+int_too_wide() { [ "${#1}" -gt "$MAX_INT_DIGITS" ]; }
+
 validate_numeric() {
   case "$2" in
     '' | *[!0-9]*)
@@ -51,7 +61,7 @@ validate_numeric() {
   # Reject values too long to compare as shell integers: test(1) aborts with
   # "Illegal number" beyond LONG_MAX, and validate_range's `if` silently
   # swallows that error and treats the value as in-range.
-  if [ "${#2}" -gt 18 ]; then
+  if int_too_wide "$2"; then
     printf 'level=error msg="env var numeric value too large" var=%s length=%d\n' "$1" "${#2}" >&2
     return 1
   fi
@@ -80,6 +90,40 @@ validate_range() {
     printf 'level=error msg="env var out of range" var=%s value="%s" min=%s max=%s\n' "$1" "$2" "$3" "$4" >&2
     return 1
   fi
+}
+
+# warn_relay_host_shape VALUE -- warn-only shape check for RELAY_HOST. Two
+# shapes pass the metacharacter checks (a colon must be allowed for bare
+# IPv6) but render a relayhost Postfix cannot use, deferring all mail at
+# first send with only a maillog error:
+#   - a bracketed value that does not end with ] ([host]:587, [host):
+#     compute_relayhost appends :$RELAY_PORT verbatim, rendering
+#     [host]:587:587 or an unbalanced bracket;
+#   - a host:port value (smtp.example.com:587): the colon-bearing value is
+#     bracketed whole, rendering [smtp.example.com:587]:587, an address
+#     literal that never resolves (a hostname cannot contain a colon; only
+#     an IPv6 address legitimately does).
+# Warn-only: rejecting either shape would be a config-acceptance change.
+warn_relay_host_shape() {
+  case "$1" in
+    \[*\]) return 0 ;; # well-formed bracketed literal
+    \[*)
+      printf 'level=warn msg="RELAY_HOST is bracketed but does not end with ]; the rendered relayhost is malformed and Postfix will defer all mail (put the port in RELAY_PORT, not RELAY_HOST)" relay_host="%s"\n' \
+        "$(sanitize_token "$1")" >&2
+      return 0
+      ;;
+  esac
+  case "$1" in
+    *:*)
+      case "$1" in
+        *[!0-9a-fA-F:.]*)
+          printf 'level=warn msg="RELAY_HOST contains a colon but is not an IPv6 address (host:port?); the rendered relayhost will never resolve (put the port in RELAY_PORT)" relay_host="%s"\n' \
+            "$(sanitize_token "$1")" >&2
+          ;;
+      esac
+      ;;
+  esac
+  return 0
 }
 
 validate_ipv6_cidr() {
@@ -161,9 +205,8 @@ validate_ipv4_cidr() {
         return 1
         ;;
     esac
-    # Same length guard as validate_numeric: beyond LONG_MAX test(1) aborts
-    # with a diagnostic, and the `if` swallows the failure as "in range".
-    if [ "${#_oct}" -gt 18 ]; then
+    # Same LONG_MAX guard as validate_numeric; see int_too_wide.
+    if int_too_wide "$_oct"; then
       printf 'level=error msg="IPv4 octet too large" network="%s" length=%d\n' "$(sanitize_token "$_net")" "${#_oct}" >&2
       return 1
     fi
@@ -207,9 +250,8 @@ validate_no_open_relay() {
         return 1
         ;;
     esac
-    # Same length guard as validate_numeric: beyond LONG_MAX test(1) aborts
-    # with a diagnostic, and the `if` swallows the failure as "in range".
-    if [ "${#_prefix}" -gt 18 ]; then
+    # Same LONG_MAX guard as validate_numeric; see int_too_wide.
+    if int_too_wide "$_prefix"; then
       printf 'level=error msg="network CIDR prefix too large" network="%s" length=%d\n' "$(sanitize_token "$_net")" "${#_prefix}" >&2
       return 1
     fi
