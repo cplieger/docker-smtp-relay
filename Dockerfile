@@ -267,7 +267,8 @@ FROM base AS test
 SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 ARG POSTFIX_VERSION
 COPY --chmod=755 validate.sh recipient-filter.sh entrypoint.sh /usr/local/bin/
-COPY tests/ /tmp/tests/
+COPY tests/render-test.sh /tmp/tests/render-test.sh
+COPY tests/golden/ /tmp/tests/golden/
 RUN ENTRYPOINT_DIR=/usr/local/bin sh /tmp/tests/render-test.sh \
     && { test "$(postconf -h mail_version)" = "${POSTFIX_VERSION#v}" \
       || { printf 'FAIL: mail_version %s does not match pinned %s\n' \

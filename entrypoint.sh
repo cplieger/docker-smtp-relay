@@ -461,7 +461,7 @@ run_bounded() {
 # duplicating the fields at every call site.
 timeout_log_fields() {
   case "$1" in
-    124|137|143) printf ' reason=timeout timeout_seconds=%d' "$STARTUP_CMD_TIMEOUT" ;;
+    124 | 137 | 143) printf ' reason=timeout timeout_seconds=%d' "$STARTUP_CMD_TIMEOUT" ;;
   esac
 }
 
@@ -592,9 +592,10 @@ run_postfix_checks() {
 # implicit-TLS upstream (465, no plaintext greeting) nc's own idle-close
 # (success) wins the race instead of being SIGTERM-killed (a spurious
 # "unreachable" warn). Total stays bounded under the 15s healthcheck
-# start-period (max 10 + 2 = 12s).
+# start-period (max 10 + 2 = 12s; a TERM-ignoring nc is KILLed 2s
+# later, still under 15s).
 probe_relay_tcp() {
-  printf 'QUIT\r\n' | timeout "$((STARTUP_PROBE_TIMEOUT + 2))" nc -w "$STARTUP_PROBE_TIMEOUT" "$1" "$2" >/dev/null 2>&1
+  printf 'QUIT\r\n' | timeout -k 2 "$((STARTUP_PROBE_TIMEOUT + 2))" nc -w "$STARTUP_PROBE_TIMEOUT" "$1" "$2" >/dev/null 2>&1
 }
 
 probe_upstream() {
@@ -642,7 +643,7 @@ probe_upstream() {
 # replaces the wrapper so the recorded PID names the timeout-supervised find
 # (terminate_startup_child TERMs the operation, not an intermediate shell).
 scan_queue_files() {
-  exec timeout 5 find "$1" -type f >"$2" 2>/dev/null
+  exec timeout -k 5 5 find "$1" -type f >"$2" 2>/dev/null
 }
 
 count_queue() {
