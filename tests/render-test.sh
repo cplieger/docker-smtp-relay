@@ -161,6 +161,10 @@ check_fail recipients-carriage-return 2 \
   RELAY_HOST=smtp.example.com \
   "RECIPIENT_RESTRICTIONS=$(printf '\r')"
 
+check_fail recipients-empty-regex 2 \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=//"
+
 check_fail bad-tls-level 2 \
   RELAY_HOST=smtp.example.com \
   SMTP_TLS_SECURITY_LEVEL=bogus
