@@ -20,7 +20,7 @@ smtp_tls_fingerprint_cert_match = 00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:f
 smtp_tls_fingerprint_digest = sha256
 smtp_tls_wrappermode = no
 smtp_tls_CAfile = /etc/ssl/certs/ca-certificates.crt
-smtp_tls_session_cache_database = btree:${data_directory}/smtp_scache
+smtp_tls_session_cache_database = lmdb:${data_directory}/smtp_scache
 smtp_tls_protocols = >=TLSv1.2
 smtp_tls_mandatory_protocols = >=TLSv1.2
 smtp_tls_mandatory_ciphers = high
