@@ -243,6 +243,11 @@ check_fail fingerprint-no-match 2 \
   RELAY_HOST=smtp.example.com \
   SMTP_TLS_SECURITY_LEVEL=fingerprint
 
+check_fail fingerprint-whitespace-match 2 \
+  RELAY_HOST=smtp.example.com \
+  SMTP_TLS_SECURITY_LEVEL=fingerprint \
+  "SMTP_TLS_FINGERPRINT_CERT_MATCH= "
+
 check_fail fingerprint-match-wrong-level 2 \
   RELAY_HOST=smtp.example.com \
   SMTP_TLS_SECURITY_LEVEL=secure \

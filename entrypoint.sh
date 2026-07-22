@@ -222,10 +222,23 @@ validate_sasl_config() {
 # validate_fingerprint_match / validate_fingerprint_digest (validate.sh).
 validate_fingerprint_config() {
   if [ "$SMTP_TLS_SECURITY_LEVEL" = fingerprint ]; then
-    if [ -z "$SMTP_TLS_FINGERPRINT_CERT_MATCH" ]; then
-      printf 'level=error msg="SMTP_TLS_SECURITY_LEVEL=fingerprint requires SMTP_TLS_FINGERPRINT_CERT_MATCH; without a match no peer can ever verify and every delivery defers"\n' >&2
-      exit 2
-    fi
+    # "Set" means at least one token: a whitespace-only value bypasses a
+    # plain -z test but word-splits to zero tokens, so
+    # validate_fingerprint_match iterates nothing and the render emits an
+    # empty smtp_tls_fingerprint_cert_match -- no peer can ever verify and
+    # every delivery defers (verified live). Same zero-token rejection the
+    # ACCEPTED_NETWORKS and RECIPIENT_RESTRICTIONS guards apply.
+    case "$SMTP_TLS_FINGERPRINT_CERT_MATCH" in
+      '')
+        printf 'level=error msg="SMTP_TLS_SECURITY_LEVEL=fingerprint requires SMTP_TLS_FINGERPRINT_CERT_MATCH; without a match no peer can ever verify and every delivery defers"\n' >&2
+        exit 2
+        ;;
+      *[![:space:]]*) ;;
+      *)
+        printf 'level=error msg="SMTP_TLS_FINGERPRINT_CERT_MATCH is non-empty but contains no tokens (whitespace only?); without a match no peer can ever verify and every delivery defers"\n' >&2
+        exit 2
+        ;;
+    esac
     validate_fingerprint_digest "$SMTP_TLS_FINGERPRINT_DIGEST" || exit 2
     validate_fingerprint_match "$SMTP_TLS_FINGERPRINT_CERT_MATCH" "$SMTP_TLS_FINGERPRINT_DIGEST" || exit 2
   else
