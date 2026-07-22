@@ -343,6 +343,21 @@ validate_relay_acceptance() {
       "$SMTP_TLS_SECURITY_LEVEL" >&2
     exit 2
   fi
+  # encrypt secures the channel but never authenticates the peer, and dane
+  # degrades to unauthenticated opportunistic TLS when the upstream has no
+  # usable TLSA records (the normal case for hosted providers): an active
+  # on-path attacker can terminate the TLS session and harvest the SASL
+  # credentials. Warn only (README documents both levels as supported); the
+  # noplaintext SASL option already blocks credentials on a fully cleartext
+  # channel, so the residual exposure is attacker-terminated TLS.
+  if sasl_enabled; then
+    case "$SMTP_TLS_SECURITY_LEVEL" in
+      encrypt | dane)
+        printf 'level=warn msg="TLS level does not guarantee upstream peer authentication; SASL credentials are exposed to an on-path TLS interceptor (prefer secure or verify)" tls_level=%s\n' \
+          "$SMTP_TLS_SECURITY_LEVEL" >&2
+        ;;
+    esac
+  fi
 
   # RELAY_PORT=465 is the documented implicit-TLS port (the render turns on
   # smtp_tls_wrappermode, see compute_tls_wrappermode), so the level must be
@@ -848,7 +863,8 @@ write_sasl_secret() {
   # Belt-and-suspenders: tighten the regenerated map to 0600 regardless of
   # the database suffix Postfix chose (ignore a missing suffix).
   chmod 600 "${SASL_PASSWD_FILE}.db" "${SASL_PASSWD_FILE}.lmdb" 2>/dev/null || true
-  # Remove plaintext credentials; Postfix only reads the .db file. A failed
+  # Remove plaintext credentials; Postfix only reads the hashed map
+  # (.lmdb in this image -- hash: maps use LMDB, see Dockerfile). A failed
   # unlink leaves the plaintext on disk: surface it as a structured error
   # instead of a raw set -e death (the EXIT trap would only retry silently).
   if ! cleanup_sasl_plaintext; then

@@ -31,11 +31,11 @@ emit_rcpt_line() {
 # regcomp Postfix's regexp: tables use in this image). dict_regexp ignores an
 # uncompilable line at map-open time with only a maillog warning, so the
 # intended allow rule silently vanishes and the /.*/ REJECT terminator rejects
-# that mail; surface it at deploy time. BusyBox grep reports a bad ERE as a
-# SILENT exit 1 — the same status as valid-but-no-match — so a plain probe
-# cannot distinguish them; the alternation probe below can: "(P)|^probe$"
-# against input "probe" matches (exit 0) whenever P compiles, and fails to
-# compile (exit 1 BusyBox / exit 2 GNU) whenever P is invalid. Warn arms
+# that mail; surface it at deploy time. A bad ERE exits 2 on both BusyBox
+# (v1.37, the pinned base) and GNU grep, while valid-but-no-match exits 1,
+# so the standalone probe classifies exit >= 2 as uncompilable; the
+# alternation probe "(P)|^probe$" (matches whenever P compiles) backstops
+# any grep variant that reports a bad ERE as a silent exit 1. Warn arms
 # still warn and emit the line unchanged, but return 10 (ineffective) so the
 # entry no longer satisfies the zero-rules guard — an all-malformed list is
 # now fatal there (2026-07 decision).
@@ -60,7 +60,15 @@ emit_regexp_recipient_rule() {
       exit 2
       ;;
   esac
-  if ! printf 'probe\n' | grep -E -e "(${_rcpt_pat})|^probe\$" >/dev/null 2>&1; then
+  # Two probes: the alternation probe alone is healed by an unbalanced-paren
+  # pattern (P='a)|(b' wraps to '(a)|(b)|^probe$', a valid ERE), so also
+  # compile P standalone and treat exit >= 2 as a regcomp failure (BusyBox
+  # v1.37 and GNU grep both exit 2 on a bad ERE; exit 1 is valid-but-no-
+  # match). Either probe failing marks the entry ineffective.
+  _rcpt_compile=0
+  printf 'probe\n' | grep -E -e "${_rcpt_pat}" >/dev/null 2>&1 || _rcpt_compile=$?
+  if [ "$_rcpt_compile" -ge 2 ] \
+    || ! printf 'probe\n' | grep -E -e "(${_rcpt_pat})|^probe\$" >/dev/null 2>&1; then
     printf 'level=warn msg="recipient restriction regex does not compile; Postfix will ignore this rule and matching recipients will be rejected" pattern="%s"\n' \
       "$(sanitize_token "$_rcpt_pat")" >&2
     _rcpt_status=10

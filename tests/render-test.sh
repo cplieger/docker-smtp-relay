@@ -241,6 +241,13 @@ check_fail recipients-all-malformed 2 \
   RELAY_HOST=smtp.example.com \
   "RECIPIENT_RESTRICTIONS=/[/"
 
+# Unbalanced-paren ERE: the alternation compile probe alone is healed by the
+# wrapping parens ('a)|(b' wraps to a valid ERE), so the standalone probe
+# must catch it; zero effective rules trips the zero-rules guard.
+check_fail recipients-all-malformed-parens 2 \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=/a)|(b/"
+
 check_fail bad-tls-level 2 \
   RELAY_HOST=smtp.example.com \
   SMTP_TLS_SECURITY_LEVEL=bogus
