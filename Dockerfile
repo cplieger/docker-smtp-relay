@@ -113,20 +113,20 @@ RUN { wget --tries=3 --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz" \
     && printf '%s  %s\n' "$POSTFIX_SHA256" "postfix-${POSTFIX_VERSION#v}.tar.gz" | sha256sum -c - \
     && tar xzf "postfix-${POSTFIX_VERSION#v}.tar.gz" --strip-components=1 --no-same-owner \
     && rm "postfix-${POSTFIX_VERSION#v}.tar.gz" "postfix-${POSTFIX_VERSION#v}.tar.gz.gpg2" \
-    && { grep -q '^#define HAS_NIS' src/util/sys_defs.h \
+    && { grep -Eq '^#define HAS_NIS([[:space:]]|$)' src/util/sys_defs.h \
       || { printf '%s\n' 'FAIL: expected active #define HAS_NIS missing from src/util/sys_defs.h (upstream source drift)' >&2; exit 1; }; } \
-    && { grep -q '^#define ALIAS_DB_MAP.*:/etc/aliases' src/util/sys_defs.h \
+    && { grep -Eq '^#define ALIAS_DB_MAP[[:space:]].*:/etc/aliases' src/util/sys_defs.h \
       || { printf '%s\n' 'FAIL: expected ALIAS_DB_MAP :/etc/aliases form missing from src/util/sys_defs.h (upstream source drift)' >&2; exit 1; }; } \
     && sed -i -e 's|#define HAS_NIS|//#define HAS_NIS|g' \
            -e '/^#define ALIAS_DB_MAP/s|:/etc/aliases|:/etc/postfix/aliases|' \
            src/util/sys_defs.h \
-    && { ! grep -q '^#define HAS_NIS' src/util/sys_defs.h \
+    && { ! grep -Eq '^#define HAS_NIS([[:space:]]|$)' src/util/sys_defs.h \
       || { printf '%s\n' 'FAIL: an active #define HAS_NIS survived the sed in src/util/sys_defs.h' >&2; exit 1; }; } \
-    && { grep -q '^//#define HAS_NIS' src/util/sys_defs.h \
+    && { grep -Eq '^//#define HAS_NIS([[:space:]]|$)' src/util/sys_defs.h \
       || { printf '%s\n' 'FAIL: HAS_NIS was not commented out in src/util/sys_defs.h' >&2; exit 1; }; } \
-    && { ! grep -q '^#define ALIAS_DB_MAP.*:/etc/aliases' src/util/sys_defs.h \
+    && { ! grep -Eq '^#define ALIAS_DB_MAP[[:space:]].*:/etc/aliases' src/util/sys_defs.h \
       || { printf '%s\n' 'FAIL: an ALIAS_DB_MAP :/etc/aliases form survived the sed in src/util/sys_defs.h' >&2; exit 1; }; } \
-    && { grep -q '^#define ALIAS_DB_MAP.*:/etc/postfix/aliases' src/util/sys_defs.h \
+    && { grep -Eq '^#define ALIAS_DB_MAP[[:space:]].*:/etc/postfix/aliases' src/util/sys_defs.h \
       || { printf '%s\n' 'FAIL: ALIAS_DB_MAP was not rewritten to /etc/postfix/aliases in src/util/sys_defs.h' >&2; exit 1; }; } \
     && { grep -q '/usr/local/' conf/master.cf \
       || { printf '%s\n' 'FAIL: expected /usr/local/ paths missing from conf/master.cf (upstream source drift)' >&2; exit 1; }; } \
