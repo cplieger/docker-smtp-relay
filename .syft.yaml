@@ -1,9 +1,0 @@
-# Enable Syft's sbom-cataloger in addition to the default image catalogers.
-# Postfix is compiled from source and copied in as loose staged files (no apk
-# package), so the defaults record its files but no package identity; the
-# sbom-cataloger imports the CycloneDX component the Dockerfile embeds at
-# /usr/share/sbom/postfix.cdx.json, putting the Postfix name/version/purl
-# into the signed release SBOM so advisories can be matched against shipped
-# images. The central release workflow auto-detects this file and passes it
-# to anchore/sbom-action.
-select-catalogers: ["+sbom-cataloger"]
