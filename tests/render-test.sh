@@ -123,6 +123,15 @@ check_ok recipients-mixed-malformed \
   RELAY_HOST=smtp.example.com \
   "RECIPIENT_RESTRICTIONS=user@example.com /[/"
 
+# Valid ERE with a backreference: the alternation compile probe must prepend
+# its guaranteed-match alternative rather than wrap the pattern in a capture
+# group ('(P)|^probe$' renumbers \1 to the still-open outer group and
+# false-fails on GNU grep). Must render exit 0 under both GNU grep and the
+# pinned BusyBox 1.37 image.
+check_ok recipients-backreference \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=/(a)\1/"
+
 check_ok ipv6-relay \
   RELAY_HOST=2001:db8::1
 
@@ -241,9 +250,9 @@ check_fail recipients-all-malformed 2 \
   RELAY_HOST=smtp.example.com \
   "RECIPIENT_RESTRICTIONS=/[/"
 
-# Unbalanced-paren ERE: the alternation compile probe alone is healed by the
-# wrapping parens ('a)|(b' wraps to a valid ERE), so the standalone probe
-# must catch it; zero effective rules trips the zero-rules guard.
+# Unbalanced-paren ERE: the standalone compile probe must catch it (the
+# prepended '^probe$|' alternative leaves the parens unmatched, but a grep
+# variant could heal them); zero effective rules trips the zero-rules guard.
 check_fail recipients-all-malformed-parens 2 \
   RELAY_HOST=smtp.example.com \
   "RECIPIENT_RESTRICTIONS=/a)|(b/"

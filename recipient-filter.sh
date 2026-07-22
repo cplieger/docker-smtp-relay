@@ -34,7 +34,7 @@ emit_rcpt_line() {
 # that mail; surface it at deploy time. A bad ERE exits 2 on both BusyBox
 # (v1.37, the pinned base) and GNU grep, while valid-but-no-match exits 1,
 # so the standalone probe classifies exit >= 2 as uncompilable; the
-# alternation probe "(P)|^probe$" (matches whenever P compiles) backstops
+# alternation probe "^probe$|P" (matches whenever P compiles) backstops
 # any grep variant that reports a bad ERE as a silent exit 1. Warn arms
 # still warn and emit the line unchanged, but return 10 (ineffective) so the
 # entry no longer satisfies the zero-rules guard — an all-malformed list is
@@ -60,15 +60,13 @@ emit_regexp_recipient_rule() {
       exit 2
       ;;
   esac
-  # Two probes: the alternation probe alone is healed by an unbalanced-paren
-  # pattern (P='a)|(b' wraps to '(a)|(b)|^probe$', a valid ERE), so also
-  # compile P standalone and treat exit >= 2 as a regcomp failure (BusyBox
-  # v1.37 and GNU grep both exit 2 on a bad ERE; exit 1 is valid-but-no-
-  # match). Either probe failing marks the entry ineffective.
+  # Two probes: compile P standalone, then prepend a guaranteed-match
+  # alternative without wrapping P so capture/backreference numbering is
+  # unchanged. Prefixing also leaves unmatched parentheses unmatched.
   _rcpt_compile=0
   printf 'probe\n' | grep -E -e "${_rcpt_pat}" >/dev/null 2>&1 || _rcpt_compile=$?
   if [ "$_rcpt_compile" -ge 2 ] \
-    || ! printf 'probe\n' | grep -E -e "(${_rcpt_pat})|^probe\$" >/dev/null 2>&1; then
+    || ! printf 'probe\n' | grep -E -e "^probe\$|${_rcpt_pat}" >/dev/null 2>&1; then
     printf 'level=warn msg="recipient restriction regex does not compile; Postfix will ignore this rule and matching recipients will be rejected" pattern="%s"\n' \
       "$(sanitize_token "$_rcpt_pat")" >&2
     _rcpt_status=10
