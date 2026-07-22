@@ -203,7 +203,7 @@ tools.
 | [gitleaks](https://github.com/gitleaks/gitleaks) | No secrets detected                                                             |
 | [trivy](https://trivy.dev/)                      | Clean                                                                           |
 | [grype](https://github.com/anchore/grype)        | Clean                                                                           |
-| [semgrep](https://semgrep.dev/)                  | 5 findings (ifs-tampering — deliberate IFS save/restore idiom, false positives) |
+| [semgrep](https://semgrep.dev/)                  | 7 findings (ifs-tampering — deliberate IFS save/restore idiom, false positives) |
 
 The entrypoint validates all env vars before generating Postfix
 config: newline injection, numeric range, shell metacharacters,
@@ -231,7 +231,7 @@ TCP/25 to trusted source subnets.
 
 ## Dependencies
 
-All dependencies are updated automatically via [Renovate](https://github.com/renovatebot/renovate). The base image is pinned by SHA digest, and Postfix is pinned by version + SHA-256 and built from the upstream source tarball with feature parity to the Alpine `postfix` package (TLS, Cyrus SASL client auth, PCRE2, LMDB as the default map type, SMTPUTF8). The SASL runtime packages and shared libraries are installed unpinned so they track the digest-pinned base userland.
+All dependencies are updated automatically via [Renovate](https://github.com/renovatebot/renovate). The base image is pinned by SHA digest, and Postfix is pinned by version + SHA-256, its detached release signature verified at build with `gpgv` against the upstream signing key committed in this repo, and built from the upstream source tarball with feature parity to the Alpine `postfix` package (TLS, Cyrus SASL client auth, PCRE2, LMDB as the default map type, SMTPUTF8). The image embeds a CycloneDX component for the source-built Postfix so release SBOMs carry its name and version. The SASL runtime packages and shared libraries are installed unpinned so they track the digest-pinned base userland.
 
 | Dependency                    | Source                                                          |
 | ----------------------------- | --------------------------------------------------------------- |
