@@ -95,8 +95,8 @@ are fully supported for upstreams that warrant them:
   example a local `unbound`); with a non-validating resolver, TLSA records are
   never seen as secure. Fallback is Postfix-native, by design: when a
   destination has no usable (DNSSEC-validated) TLSA records, Postfix degrades
-  `dane` to the documented weaker semantics per RFC 7672 and logs the
-  downgrade — nothing defers just because TLSA is absent. Rejected on port 465
+  `dane` to the documented weaker semantics per RFC 7672 — nothing
+  defers just because TLSA is absent. Rejected on port 465
   (opportunistic-family; implicit TLS needs a mandatory level).
 - **`dane-only`** — mandatory DANE: same mechanics, but no fallback by
   design — delivery defers until DNSSEC-validated TLSA records verify. Use
