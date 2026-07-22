@@ -39,16 +39,21 @@ validate_no_newlines() {
 #     empty / slash-leading recipient regex class).
 #   Tier 2 (fatal, documented contract): value combinations the app's own
 #     documented contract says can never function -- the implicit-TLS 465
-#     mandatory-level gate, and the landed never-matching-shape escalations
+#     mandatory-level gate, the landed never-matching-shape escalations
 #     (whitespace-only / leading-zero / multi-slash network entries,
-#     leading-bracket RELAY_HOST defects). This set is CLOSED: each entry
+#     leading-bracket RELAY_HOST defects), and the fingerprint-family
+#     checks (both-or-neither with level=fingerprint; per-token
+#     colon-separated-hex-pairs format with digest-matching pair count;
+#     sha256/sha512 digest allowlist). This set is CLOSED: each entry
 #     was an explicit user decision; new entries require the same.
 #   Tier 3 (operator's responsibility): syntactically-plausible but
 #     semantically-wrong values beyond those tiers (typo'd hostnames,
 #     host:port confusion, exotic never-matching shapes). The validator does
-#     NOT chase these per-shape: the existing warn arms are grandfathered-
-#     final, no new shape arms get added without a Tier 1/2 justification,
-#     and Postfix's own runtime diagnostics are the source of truth for them.
+#     NOT chase these per-shape: the existing warn arms (all shape
+#     heuristics; every $TLS_LEVELS entry is now fully supported, so no
+#     level-specific warn arms remain) are grandfathered-final, no new shape
+#     arms get added without a Tier 1/2 justification, and Postfix's own
+#     runtime diagnostics are the source of truth for them.
 
 # sanitize_token -- strip logfmt delimiters (backslash, double quote) and
 # control bytes (CR, VT, FF, ...), and bound the value to 512 bytes, so a
@@ -363,6 +368,72 @@ validate_tls_level() {
   # quoting) — the allowlist is enough context to fix the config.
   printf 'level=error msg="invalid TLS security level" var=SMTP_TLS_SECURITY_LEVEL valid="%s"\n' "$TLS_LEVELS" >&2
   return 1
+}
+
+# validate_fingerprint_digest VALUE -- allowlist for
+# SMTP_TLS_FINGERPRINT_DIGEST. sha256 and sha512 only: md5 and sha1 are
+# rejected to match this image's security posture (it already narrows
+# upstream Postfix defaults to >=TLSv1.2 and high ciphers), and a
+# collision-weak digest as the sole trust anchor defeats the point of
+# fingerprint pinning.
+validate_fingerprint_digest() {
+  case "$1" in
+    sha256 | sha512) return 0 ;;
+  esac
+  # The rejected value is unvalidated input; do not interpolate it (logfmt
+  # quoting) — the allowlist is enough context to fix the config.
+  printf 'level=error msg="invalid fingerprint digest (md5/sha1 are rejected: collision-weak digests cannot anchor trust)" var=SMTP_TLS_FINGERPRINT_DIGEST valid="sha256 sha512"\n' >&2
+  return 1
+}
+
+# validate_fingerprint_match MATCH DIGEST -- format check for
+# SMTP_TLS_FINGERPRINT_CERT_MATCH (Tier 2, explicit user decision). Postfix
+# compares each configured digest against the peer certificate/public-key
+# digest as colon-separated hex pairs (postconf(5)
+# smtp_tls_fingerprint_cert_match); a token in any other shape -- non-hex
+# characters, missing/doubled colons, or a pair count that does not match
+# the digest length (sha256 = 32 pairs, sha512 = 64) -- can never match any
+# peer, so the level=fingerprint relay would defer every delivery with
+# maillog-only diagnostics. Deterministic never-match => fatal.
+validate_fingerprint_match() {
+  # Copy both args up front: the pair count below repurposes the positional
+  # parameters via `set --`.
+  _fm_match=$1
+  _fm_digest=$2
+  _fm_want_pairs=32
+  [ "$_fm_digest" = sha512 ] && _fm_want_pairs=64
+  for _fm_token in $_fm_match; do
+    # Reject shapes the colon split below cannot see: a leading, trailing,
+    # or doubled colon yields an empty pair that POSIX field splitting can
+    # drop (a trailing colon would otherwise pass with a correct count).
+    case "$_fm_token" in
+      *[!0-9a-fA-F:]* | :* | *: | *::*)
+        printf 'level=error msg="fingerprint match token is not colon-separated hex pairs; it can never match any peer and every delivery would defer" var=SMTP_TLS_FINGERPRINT_CERT_MATCH token="%s"\n' \
+          "$(sanitize_token "$_fm_token")" >&2
+        return 1
+        ;;
+    esac
+    _oldIFS=$IFS
+    IFS=:
+    # shellcheck disable=SC2086
+    set -- $_fm_token
+    IFS=$_oldIFS
+    if [ $# -ne "$_fm_want_pairs" ]; then
+      printf 'level=error msg="fingerprint match token has wrong digest length; it can never match any peer and every delivery would defer" var=SMTP_TLS_FINGERPRINT_CERT_MATCH token="%s" pairs=%d want_pairs=%d digest=%s\n' \
+        "$(sanitize_token "$_fm_token")" "$#" "$_fm_want_pairs" "$_fm_digest" >&2
+      return 1
+    fi
+    for _fm_pair; do
+      case "$_fm_pair" in
+        [0-9a-fA-F][0-9a-fA-F]) ;;
+        *)
+          printf 'level=error msg="fingerprint match token has a malformed hex pair; it can never match any peer and every delivery would defer" var=SMTP_TLS_FINGERPRINT_CERT_MATCH token="%s"\n' \
+            "$(sanitize_token "$_fm_token")" >&2
+          return 1
+          ;;
+      esac
+    done
+  done
 }
 
 # Reject SASL credentials that would break the sasl_passwd field format

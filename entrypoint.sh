@@ -35,20 +35,22 @@ readonly MAIN_CF="${CONF_DIR}/main.cf"
 # ---------------------------------------------------------------------------
 # Config contract
 # ---------------------------------------------------------------------------
-# Env Var                  Type      Default              Constraints
-# -------                  ----      -------              -----------
-# ACCEPTED_NETWORKS        string    192.168.0.0/16 ...   space-separated CIDRs; min /8; no 0.0.0.0/0 or ::/0
-# CONF_DIR                 string    /etc/postfix         no newlines/metacharacters (rendered into main.cf paths)
-# RELAY_HOST               string    (required)           no newlines/metacharacters; non-empty; well-formed [brackets] (host:port warned)
-# RELAY_PORT               integer   587                  1-65535
-# RELAY_LOGIN              string    ""                   no whitespace or colons
-# RELAY_PASSWORD           string    ""                   no whitespace
-# RECIPIENT_RESTRICTIONS   string    ""                   space-separated; addresses, domains, or /regex/
-# SMTP_TLS_SECURITY_LEVEL  enum      secure               one of $TLS_LEVELS (see validate.sh); not none/may/dane with RELAY_PORT=465
-# MESSAGE_SIZE_LIMIT       integer   10240000             max 104857600 (100 MB)
-# SMTP_HOSTNAME            string    smtp-relay.local     FQDN recommended (shape not enforced); no newlines/metacharacters
-# STARTUP_PROBE            enum      true                 true|false; fail-soft upstream TCP check
-# STARTUP_PROBE_TIMEOUT    integer   5                    1-10; seconds (kept under healthcheck start-period)
+# Env Var                          Type      Default              Constraints
+# -------                          ----      -------              -----------
+# ACCEPTED_NETWORKS                string    192.168.0.0/16 ...   space-separated CIDRs; min /8; no 0.0.0.0/0 or ::/0
+# CONF_DIR                         string    /etc/postfix         no newlines/metacharacters (rendered into main.cf paths)
+# RELAY_HOST                       string    (required)           no newlines/metacharacters; non-empty; well-formed [brackets] (host:port warned)
+# RELAY_PORT                       integer   587                  1-65535
+# RELAY_LOGIN                      string    ""                   no whitespace or colons
+# RELAY_PASSWORD                   string    ""                   no whitespace
+# RECIPIENT_RESTRICTIONS           string    ""                   space-separated; addresses, domains, or /regex/
+# SMTP_TLS_SECURITY_LEVEL          enum      secure               one of $TLS_LEVELS (see validate.sh); not none/may/dane with RELAY_PORT=465; fingerprint requires SMTP_TLS_FINGERPRINT_CERT_MATCH
+# SMTP_TLS_FINGERPRINT_CERT_MATCH  string    ""                   space-separated digests, each colon-separated hex pairs; both-or-neither with level=fingerprint
+# SMTP_TLS_FINGERPRINT_DIGEST      enum      sha256               sha256|sha512 only; explicitly setting it at a non-fingerprint level is fatal
+# MESSAGE_SIZE_LIMIT               integer   10240000             max 104857600 (100 MB)
+# SMTP_HOSTNAME                    string    smtp-relay.local     FQDN recommended (shape not enforced); no newlines/metacharacters
+# STARTUP_PROBE                    enum      true                 true|false; fail-soft upstream TCP check
+# STARTUP_PROBE_TIMEOUT            integer   5                    1-10; seconds (kept under healthcheck start-period)
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
@@ -78,6 +80,18 @@ apply_defaults() {
   # Default to `secure` (chain + hostname verification) so a deploy without the
   # compose override does not silently fall back to cert-blind TLS.
   : "${SMTP_TLS_SECURITY_LEVEL:=secure}"
+  : "${SMTP_TLS_FINGERPRINT_CERT_MATCH:=}"
+  # Distinguish unset from explicitly set for the digest (same technique as
+  # ACCEPTED_NETWORKS above): the sha256 default must not trip the
+  # fingerprint-family both-or-neither check at non-fingerprint levels, but
+  # an operator-set digest (even the default spelling) at another level is a
+  # misconfiguration surprise validate_fingerprint_config rejects.
+  if [ "${SMTP_TLS_FINGERPRINT_DIGEST+x}" = x ]; then
+    FINGERPRINT_DIGEST_EXPLICIT=true
+  else
+    FINGERPRINT_DIGEST_EXPLICIT=false
+    SMTP_TLS_FINGERPRINT_DIGEST=sha256
+  fi
   : "${MESSAGE_SIZE_LIMIT:=10240000}"
   # Use an FQDN-shaped default so Postfix does not emit `numeric hostname`
   # warnings and receiving MTAs that validate HELO accept the relay. Set a
@@ -135,6 +149,8 @@ RELAY_PASSWORD:nl
 ACCEPTED_NETWORKS:nl
 RECIPIENT_RESTRICTIONS:nl
 SMTP_TLS_SECURITY_LEVEL:nl
+SMTP_TLS_FINGERPRINT_CERT_MATCH:nl
+SMTP_TLS_FINGERPRINT_DIGEST:nl
 MESSAGE_SIZE_LIMIT:nl,num,range=1:104857600
 SMTP_HOSTNAME:nl,meta
 STARTUP_PROBE:nl
@@ -193,6 +209,39 @@ validate_sasl_config() {
   fi
 }
 
+# validate_fingerprint_config — the fingerprint-family vars are both-or-
+# neither with SMTP_TLS_SECURITY_LEVEL=fingerprint, mirroring the
+# RELAY_LOGIN/RELAY_PASSWORD contract (Tier 2, explicit user decision):
+#   - level=fingerprint without a cert match can never verify any peer
+#     (every delivery defers with maillog-only diagnostics), so it is
+#     rejected at boot instead of rendering a dead relay.
+#   - a cert match (or an explicitly set digest) at any other level is
+#     silently ignored by Postfix — a configured trust anchor that does
+#     nothing is a misconfiguration surprise, so it is equally fatal.
+# Token format and the sha256/sha512 digest allowlist are enforced by
+# validate_fingerprint_match / validate_fingerprint_digest (validate.sh).
+validate_fingerprint_config() {
+  if [ "$SMTP_TLS_SECURITY_LEVEL" = fingerprint ]; then
+    if [ -z "$SMTP_TLS_FINGERPRINT_CERT_MATCH" ]; then
+      printf 'level=error msg="SMTP_TLS_SECURITY_LEVEL=fingerprint requires SMTP_TLS_FINGERPRINT_CERT_MATCH; without a match no peer can ever verify and every delivery defers"\n' >&2
+      exit 2
+    fi
+    validate_fingerprint_digest "$SMTP_TLS_FINGERPRINT_DIGEST" || exit 2
+    validate_fingerprint_match "$SMTP_TLS_FINGERPRINT_CERT_MATCH" "$SMTP_TLS_FINGERPRINT_DIGEST" || exit 2
+  else
+    if [ -n "$SMTP_TLS_FINGERPRINT_CERT_MATCH" ]; then
+      printf 'level=error msg="SMTP_TLS_FINGERPRINT_CERT_MATCH is set but SMTP_TLS_SECURITY_LEVEL is not fingerprint; refusing to silently ignore a configured trust anchor" tls_level=%s\n' \
+        "$SMTP_TLS_SECURITY_LEVEL" >&2
+      exit 2
+    fi
+    if [ "$FINGERPRINT_DIGEST_EXPLICIT" = true ]; then
+      printf 'level=error msg="SMTP_TLS_FINGERPRINT_DIGEST is set but SMTP_TLS_SECURITY_LEVEL is not fingerprint; the digest only applies to the fingerprint level" tls_level=%s\n' \
+        "$SMTP_TLS_SECURITY_LEVEL" >&2
+      exit 2
+    fi
+  fi
+}
+
 # validate_relay_acceptance — relay-acceptance policy: who we accept mail
 # from, and that credentials never travel a cleartext upstream channel.
 validate_relay_acceptance() {
@@ -240,19 +289,6 @@ validate_relay_acceptance() {
     exit 2
   fi
 
-  # dane/dane-only obtain TLS policy via DNSSEC-validated TLSA lookups,
-  # which need smtp_dns_support_level = dnssec (not rendered) plus a
-  # validating resolver; fingerprint needs smtp_tls_fingerprint_cert_match
-  # (not configurable in this image). Warn at boot: dane degrades to may,
-  # dane-only and fingerprint defer all mail with maillog-only diagnostics.
-  case "$SMTP_TLS_SECURITY_LEVEL" in
-    dane)
-      printf 'level=warn msg="SMTP_TLS_SECURITY_LEVEL=dane degrades to may in this image (smtp_dns_support_level=dnssec is not rendered, so DNSSEC-validated TLSA records are never found)" tls_level=dane\n' >&2
-      ;;
-    dane-only | fingerprint)
-      printf 'level=warn msg="SMTP_TLS_SECURITY_LEVEL cannot verify any peer in this image (dane-only needs DNSSEC TLSA lookups, fingerprint needs smtp_tls_fingerprint_cert_match; neither is rendered); every delivery will defer" tls_level=%s\n' "$SMTP_TLS_SECURITY_LEVEL" >&2
-      ;;
-  esac
 }
 
 # validate_runtime_config — runtime toggles and the filesystem contract.
@@ -284,6 +320,7 @@ validate_runtime_config() {
 validate_config() {
   validate_declared_fields
   validate_sasl_config
+  validate_fingerprint_config
   validate_relay_acceptance
   validate_runtime_config
 
@@ -316,6 +353,39 @@ compute_tls_wrappermode() {
   else
     SMTP_TLS_WRAPPERMODE="no"
   fi
+}
+
+# ---------------------------------------------------------------------------
+# compute_tls_policy_lines — extra main.cf lines the selected TLS level
+# needs, appended directly after the smtp_tls_security_level line (an empty
+# value renders nothing, so output for every other level stays byte-
+# identical).
+#   dane/dane-only: DANE obtains TLS policy from DNSSEC-validated TLSA
+#     records, which requires smtp_dns_support_level = dnssec (postconf(5):
+#     DANE support is disabled at the default dns support level). The
+#     resolver chain must be DNSSEC-validating and trusted — see README.
+#     Fallback is Postfix-native, not reimplemented here: dane is
+#     opportunistic per RFC 7672 (degrades to mandatory-encrypt/may
+#     semantics when no usable TLSA/DNSSEC, logged by Postfix); dane-only
+#     is mandatory with no fallback by design (delivery defers until TLSA
+#     verifies).
+#   fingerprint: render the operator's cert match and the digest explicitly
+#     (even at the sha256 default) so the effective trust anchor is
+#     auditable in the generated main.cf.
+# ---------------------------------------------------------------------------
+compute_tls_policy_lines() {
+  TLS_POLICY_LINES=''
+  case "$SMTP_TLS_SECURITY_LEVEL" in
+    dane | dane-only)
+      TLS_POLICY_LINES="
+smtp_dns_support_level = dnssec"
+      ;;
+    fingerprint)
+      TLS_POLICY_LINES="
+smtp_tls_fingerprint_cert_match = ${SMTP_TLS_FINGERPRINT_CERT_MATCH}
+smtp_tls_fingerprint_digest = ${SMTP_TLS_FINGERPRINT_DIGEST}"
+      ;;
+  esac
 }
 
 # ---------------------------------------------------------------------------
@@ -456,7 +526,7 @@ smtp_sasl_security_options = noanonymous, noplaintext
 smtp_sasl_tls_security_options = noanonymous
 smtp_sasl_mechanism_filter = plain, login
 
-smtp_tls_security_level = ${SMTP_TLS_SECURITY_LEVEL}
+smtp_tls_security_level = ${SMTP_TLS_SECURITY_LEVEL}${TLS_POLICY_LINES}
 smtp_tls_wrappermode = ${SMTP_TLS_WRAPPERMODE}
 smtp_tls_CAfile = /etc/ssl/certs/ca-certificates.crt
 smtp_tls_session_cache_database = btree:\${data_directory}/smtp_scache
@@ -495,6 +565,7 @@ render_config() {
   validate_config
   compute_relayhost
   compute_tls_wrappermode
+  compute_tls_policy_lines
   compute_mynetworks
   compute_sasl_state
   # Sets SMTPD_RECIPIENT_RESTRICTIONS and writes $CONF_DIR/recipient_access.

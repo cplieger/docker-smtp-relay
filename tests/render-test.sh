@@ -131,6 +131,28 @@ check_ok custom-port-tls \
   ACCEPTED_NETWORKS=10.10.0.0/16 \
   SMTP_HOSTNAME=relay.example.com
 
+# dane obtains TLS policy from DNSSEC-validated TLSA records; the render must
+# add smtp_dns_support_level = dnssec (postconf(5): DANE is disabled at the
+# default dns support level) while keeping STARTTLS wrappermode off.
+check_ok dane-relay \
+  RELAY_HOST=smtp.example.com \
+  SMTP_TLS_SECURITY_LEVEL=dane
+
+# dane-only is a mandatory level, so it satisfies implicit TLS on 465:
+# dnssec support line plus wrappermode = yes.
+check_ok dane-only-465 \
+  RELAY_HOST=smtp.example.com \
+  RELAY_PORT=465 \
+  SMTP_TLS_SECURITY_LEVEL=dane-only
+
+# fingerprint renders the operator's trust anchors (space-separated tokens of
+# colon-separated hex pairs) and the digest — explicit even at the sha256
+# default, for auditability. No dnssec line.
+check_ok fingerprint-relay \
+  RELAY_HOST=smtp.example.com \
+  SMTP_TLS_SECURITY_LEVEL=fingerprint \
+  "SMTP_TLS_FINGERPRINT_CERT_MATCH=00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99"
+
 # --- Rejected configurations (exit 2) -------------------------------------
 check_fail no-relay-host 2 \
   RELAY_HOST=
@@ -212,6 +234,38 @@ check_fail implicit-tls-dane 2 \
   RELAY_HOST=smtp.example.com \
   RELAY_PORT=465 \
   SMTP_TLS_SECURITY_LEVEL=dane
+
+# The fingerprint-family vars are both-or-neither with level=fingerprint
+# (mirrors the RELAY_LOGIN/RELAY_PASSWORD contract): a fingerprint level
+# without a match can never deliver; a match or an explicit digest at any
+# other level is a silently-ignored trust anchor.
+check_fail fingerprint-no-match 2 \
+  RELAY_HOST=smtp.example.com \
+  SMTP_TLS_SECURITY_LEVEL=fingerprint
+
+check_fail fingerprint-match-wrong-level 2 \
+  RELAY_HOST=smtp.example.com \
+  SMTP_TLS_SECURITY_LEVEL=secure \
+  "SMTP_TLS_FINGERPRINT_CERT_MATCH=00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff"
+
+# Explicit digest at a non-fingerprint level (the level defaults to secure).
+check_fail fingerprint-digest-wrong-level 2 \
+  RELAY_HOST=smtp.example.com \
+  SMTP_TLS_FINGERPRINT_DIGEST=sha256
+
+# Wrong pair count for sha256 (32 pairs required): a deterministic
+# never-match token is fatal, not a warn.
+check_fail fingerprint-bad-token 2 \
+  RELAY_HOST=smtp.example.com \
+  SMTP_TLS_SECURITY_LEVEL=fingerprint \
+  SMTP_TLS_FINGERPRINT_CERT_MATCH=de:ad:be:ef
+
+# md5/sha1 digests are rejected (collision-weak; sha256/sha512 only).
+check_fail fingerprint-md5-digest 2 \
+  RELAY_HOST=smtp.example.com \
+  SMTP_TLS_SECURITY_LEVEL=fingerprint \
+  SMTP_TLS_FINGERPRINT_CERT_MATCH=00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff \
+  SMTP_TLS_FINGERPRINT_DIGEST=md5
 
 check_fail relay-host-bracket-port 2 \
   "RELAY_HOST=[2001:db8::1]:587"
