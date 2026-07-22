@@ -92,39 +92,43 @@ validate_range() {
   fi
 }
 
-# warn_relay_host_shape VALUE -- warn-only shape check for RELAY_HOST. Two
-# shapes pass the metacharacter checks (a colon must be allowed for bare
+# validate_relay_host_shape VALUE -- shape check for RELAY_HOST. Two shape
+# classes pass the metacharacter checks (a colon must be allowed for bare
 # IPv6) but render a relayhost Postfix cannot use, deferring all mail at
 # first send with only a maillog error:
-#   - a bracketed value that does not end with ] ([host]:587, [host):
-#     compute_relayhost appends :$RELAY_PORT verbatim, rendering
-#     [host]:587:587 or an unbalanced bracket;
+#   - bracket defects ([host]:587, [host, [], [[host]], [host]:587]):
+#     compute_relayhost trusts the leading bracket and appends :$RELAY_PORT
+#     verbatim, rendering [host]:587:587, an unbalanced bracket, or a
+#     malformed literal. No legitimate RELAY_HOST ever matches these
+#     shapes, so they are fatal (return 1; the caller exits 2).
 #   - a host:port value (smtp.example.com:587): the colon-bearing value is
 #     bracketed whole, rendering [smtp.example.com:587]:587, an address
 #     literal that never resolves (a hostname cannot contain a colon; only
-#     an IPv6 address legitimately does).
-# Warn-only: rejecting either shape would be a config-acceptance change.
-warn_relay_host_shape() {
+#     an IPv6 address legitimately does). Warn-only: this arm is a
+#     heuristic an exotic value could trip, so rejecting it would be a
+#     config-acceptance change.
+validate_relay_host_shape() {
   case "$1" in
     \[*\])
       # Outer brackets alone are not proof of a well-formed literal: strip
-      # them and warn when the interior is empty or still contains a bracket
-      # ([], [[host]], [host]:587] -- compute_relayhost trusts the leading
-      # bracket, so the rendered relayhost is malformed).
+      # them and reject when the interior is empty or still contains a
+      # bracket ([], [[host]], [host]:587] -- compute_relayhost trusts the
+      # leading bracket, so the rendered relayhost is malformed).
       _rh_inner=${1#\[}
       _rh_inner=${_rh_inner%\]}
       case "$_rh_inner" in
         '' | *\[* | *\]*)
-          printf 'level=warn msg="RELAY_HOST has malformed brackets; the rendered relayhost is malformed and Postfix will defer all mail (use a single [host] literal and put the port in RELAY_PORT)" relay_host="%s"\n' \
+          printf 'level=error msg="RELAY_HOST has malformed brackets; the rendered relayhost would be malformed and Postfix would defer all mail (use a single [host] literal and put the port in RELAY_PORT)" relay_host="%s"\n' \
             "$(sanitize_token "$1")" >&2
+          return 1
           ;;
       esac
       return 0
       ;;
     \[*)
-      printf 'level=warn msg="RELAY_HOST is bracketed but does not end with ]; the rendered relayhost is malformed and Postfix will defer all mail (put the port in RELAY_PORT, not RELAY_HOST)" relay_host="%s"\n' \
+      printf 'level=error msg="RELAY_HOST is bracketed but does not end with ]; the rendered relayhost would be malformed and Postfix would defer all mail (put the port in RELAY_PORT, not RELAY_HOST)" relay_host="%s"\n' \
         "$(sanitize_token "$1")" >&2
-      return 0
+      return 1
       ;;
   esac
   case "$1" in

@@ -193,6 +193,12 @@ check_fail bad-tls-level 2 \
   RELAY_HOST=smtp.example.com \
   SMTP_TLS_SECURITY_LEVEL=bogus
 
+check_fail relay-host-bracket-port 2 \
+  "RELAY_HOST=[2001:db8::1]:587"
+
+check_fail relay-host-unbalanced-bracket 2 \
+  "RELAY_HOST=[2001:db8::1"
+
 # --- sanitize_token regression ---------------------------------------------
 # The golden harness only diffs rendered files and asserts exit codes; there
 # is no stderr-log assertion mechanism, so exercise the log-only sanitizer

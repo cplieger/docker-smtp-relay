@@ -180,7 +180,7 @@ STARTUP_PROBE_TIMEOUT:nl,num,range=1:10
     printf 'level=error msg="RELAY_HOST must be set"\n' >&2
     exit 2
   fi
-  warn_relay_host_shape "$RELAY_HOST"
+  validate_relay_host_shape "$RELAY_HOST" || exit 2
 }
 
 # validate_sasl_config — SASL credentials are both-or-neither.
