@@ -542,7 +542,7 @@ smtp_sasl_mechanism_filter = plain, login
 smtp_tls_security_level = ${SMTP_TLS_SECURITY_LEVEL}${TLS_POLICY_LINES}
 smtp_tls_wrappermode = ${SMTP_TLS_WRAPPERMODE}
 smtp_tls_CAfile = /etc/ssl/certs/ca-certificates.crt
-smtp_tls_session_cache_database = btree:\${data_directory}/smtp_scache
+smtp_tls_session_cache_database = lmdb:\${data_directory}/smtp_scache
 smtp_tls_protocols = >=TLSv1.2
 smtp_tls_mandatory_protocols = >=TLSv1.2
 smtp_tls_mandatory_ciphers = high
