@@ -732,8 +732,14 @@ write_sasl_secret() {
   # Belt-and-suspenders: tighten the regenerated map to 0600 regardless of
   # the database suffix Postfix chose (ignore a missing suffix).
   chmod 600 "${SASL_PASSWD_FILE}.db" "${SASL_PASSWD_FILE}.lmdb" 2>/dev/null || true
-  # Remove plaintext credentials; Postfix only reads the .db file.
-  cleanup_sasl_plaintext
+  # Remove plaintext credentials; Postfix only reads the .db file. A failed
+  # unlink leaves the plaintext on disk: surface it as a structured error
+  # instead of a raw set -e death (the EXIT trap would only retry silently).
+  if ! cleanup_sasl_plaintext; then
+    printf 'level=error msg="failed to remove plaintext SASL credentials file; refusing to start with plaintext credentials on disk" path="%s"\n' \
+      "$(sanitize_token "$SASL_PASSWD_FILE")" >&2
+    exit 1
+  fi
   # Drop only the EXIT cleanup trap and re-arm the startup handler: clearing
   # all traps here would leave the rest of startup (postfix checks, upstream
   # probe) without signal handling as PID 1.
