@@ -92,6 +92,38 @@ validate_range() {
   fi
 }
 
+# warn_relay_host_colon_shape CANDIDATE DISPLAY -- shared colon classifier
+# for RELAY_HOST: warn when CANDIDATE looks like host:port rather than an
+# IPv6 address. Exactly one colon can never be IPv6 (even ::1 has two), so
+# it is host:port regardless of character set (192.0.2.10:587, deadbeef:587
+# -- both all-hex, both silent under the old check). Two or more colons:
+# plausibly IPv6; warn only on characters invalid in an IPv6 address (also
+# catches %zone ids). DISPLAY is the original value to log: bracketed
+# callers pass the bracket interior as CANDIDATE but the full value as
+# DISPLAY. A single copy of the message keeps the logfmt contract in one
+# place.
+warn_relay_host_colon_shape() {
+  _rh_candidate=$1
+  _rh_display=$2
+  case "$_rh_candidate" in
+    *:*)
+      _rh_hostport=1
+      case "${_rh_candidate#*:}" in
+        *:*)
+          case "$_rh_candidate" in
+            *[!0-9a-fA-F:.]*) ;;
+            *) _rh_hostport=0 ;;
+          esac
+          ;;
+      esac
+      if [ "$_rh_hostport" -eq 1 ]; then
+        printf 'level=warn msg="RELAY_HOST contains a colon but is not an IPv6 address (host:port?); the rendered relayhost will never resolve (put the port in RELAY_PORT)" relay_host="%s"\n' \
+          "$(sanitize_token "$_rh_display")" >&2
+      fi
+      ;;
+  esac
+}
+
 # validate_relay_host_shape VALUE -- shape check for RELAY_HOST. Two shape
 # classes pass the metacharacter checks (a colon must be allowed for bare
 # IPv6) but render a relayhost Postfix cannot use, deferring all mail at
@@ -123,6 +155,11 @@ validate_relay_host_shape() {
           return 1
           ;;
       esac
+      # The bracket interior still needs the colon-shape classifier:
+      # [smtp.example.com:587] is a host:port value bracketed whole, and
+      # compute_relayhost appends :$RELAY_PORT, rendering
+      # [smtp.example.com:587]:587 -- a literal that never resolves.
+      warn_relay_host_colon_shape "$_rh_inner" "$1"
       return 0
       ;;
     \[*)
@@ -138,30 +175,7 @@ validate_relay_host_shape() {
         "$(sanitize_token "$1")" >&2
       ;;
   esac
-  case "$1" in
-    *:*)
-      # Classify the colon-bearing value, then warn once (a single copy of
-      # the message keeps the logfmt contract in one place). Exactly one
-      # colon can never be IPv6 (even ::1 has two), so it is host:port
-      # regardless of character set (192.0.2.10:587, deadbeef:587 -- both
-      # all-hex, both silent under the old check). Two or more colons:
-      # plausibly IPv6; warn only on characters invalid in an IPv6 address
-      # (also catches %zone ids).
-      _rh_hostport=1
-      case "${1#*:}" in
-        *:*)
-          case "$1" in
-            *[!0-9a-fA-F:.]*) ;;
-            *) _rh_hostport=0 ;;
-          esac
-          ;;
-      esac
-      if [ "$_rh_hostport" -eq 1 ]; then
-        printf 'level=warn msg="RELAY_HOST contains a colon but is not an IPv6 address (host:port?); the rendered relayhost will never resolve (put the port in RELAY_PORT)" relay_host="%s"\n' \
-          "$(sanitize_token "$1")" >&2
-      fi
-      ;;
-  esac
+  warn_relay_host_colon_shape "$1" "$1"
   return 0
 }
 

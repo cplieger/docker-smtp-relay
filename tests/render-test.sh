@@ -234,6 +234,39 @@ check_sanitize control-bytes "$(printf 'bad\r\vnet/24')" 'badnet/24'
 # so a hostile oversized value cannot flood a single log line.
 check_sanitize truncation "$(printf '%0600d' 0)" "$(printf '%0512d' 0)[truncated]"
 
+# --- RELAY_HOST colon-shape warning ------------------------------------------
+# The host:port warning is log-only (the value still renders), so like
+# sanitize_token it is exercised by sourcing validate.sh and asserting on
+# stderr directly.
+# check_relay_host_warn NAME VALUE WANT_WARN(0|1)
+check_relay_host_warn() {
+  _name=$1
+  _stderr=$(
+    # shellcheck source-path=SCRIPTDIR
+    # shellcheck source=../validate.sh
+    . "$ENTRYPOINT_DIR/validate.sh"
+    validate_relay_host_shape "$2" 2>&1 >/dev/null
+  )
+  case "$_stderr" in
+    *'contains a colon but is not an IPv6 address'*) _warned=1 ;;
+    *) _warned=0 ;;
+  esac
+  if [ "$_warned" = "$3" ]; then
+    pass=$((pass + 1))
+  else
+    printf 'FAIL %s: warning emitted=%d, expected %d (stderr: %s)\n' "$_name" "$_warned" "$3" "$_stderr" >&2
+    fail=$((fail + 1))
+  fi
+}
+
+# A bracketed host:port value must warn just like the unbracketed form:
+# compute_relayhost appends :$RELAY_PORT, rendering [smtp.example.com:587]:587,
+# a literal that never resolves.
+check_relay_host_warn relay-host-bracketed-hostport '[smtp.example.com:587]' 1
+
+# A well-formed bracketed IPv6 literal must stay warning-free.
+check_relay_host_warn relay-host-bracketed-ipv6 '[2001:db8::1]' 0
+
 # --- Summary --------------------------------------------------------------
 printf 'render-test: %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
