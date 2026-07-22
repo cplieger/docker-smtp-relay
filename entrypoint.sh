@@ -425,11 +425,11 @@ validate_runtime_config() {
     # carries both markers and passes both greps by design. No exit-code
     # change: both checks are heuristics an exotic-but-working layout
     # could trip.
-    if ! grep -q 'BEGIN CERTIFICATE' "$SMTPD_TLS_CERT_FILE" 2>/dev/null; then
+    if ! grep -q 'BEGIN CERTIFICATE' -- "$SMTPD_TLS_CERT_FILE" 2>/dev/null; then
       printf 'level=warn msg="inbound TLS cert file does not contain a PEM CERTIFICATE block (cert and key swapped, or not PEM?)" path="%s"\n' \
         "$(sanitize_token "$SMTPD_TLS_CERT_FILE")" >&2
     fi
-    if ! grep -q 'PRIVATE KEY' "$SMTPD_TLS_KEY_FILE" 2>/dev/null; then
+    if ! grep -q 'PRIVATE KEY' -- "$SMTPD_TLS_KEY_FILE" 2>/dev/null; then
       printf 'level=warn msg="inbound TLS key file does not contain a PEM PRIVATE KEY block (cert and key swapped, or not PEM?)" path="%s"\n' \
         "$(sanitize_token "$SMTPD_TLS_KEY_FILE")" >&2
     fi
@@ -437,7 +437,7 @@ validate_runtime_config() {
     # (read bit in either of the last two octal digits), but keep it a
     # warning — the operator may have deliberate group-read semantics on
     # the mount (e.g. a cert-renewal sidecar's shared group).
-    _key_mode=$(stat -c %a "$SMTPD_TLS_KEY_FILE" 2>/dev/null) || _key_mode=''
+    _key_mode=$(stat -c %a -- "$SMTPD_TLS_KEY_FILE" 2>/dev/null) || _key_mode=''
     case "$_key_mode" in
       *[4-7]? | *[4-7])
         printf 'level=warn msg="inbound TLS key file is group- or world-readable" path="%s" mode=%s\n' \
