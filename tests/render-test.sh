@@ -116,6 +116,13 @@ check_ok recipients \
   RELAY_HOST=smtp.example.com \
   "RECIPIENT_RESTRICTIONS=alerts@example.com example.org /^ops@example\.net$/"
 
+# Mixed valid + malformed: the container still starts on the valid subset.
+# The malformed regexp is warned, still rendered (a dead line Postfix drops
+# at map-open), and excluded from the effective-rule count.
+check_ok recipients-mixed-malformed \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=user@example.com /[/"
+
 check_ok ipv6-relay \
   RELAY_HOST=2001:db8::1
 
@@ -210,6 +217,13 @@ check_fail recipients-empty-regex 2 \
 check_fail recipients-slash-leading-regex 2 \
   RELAY_HOST=smtp.example.com \
   "RECIPIENT_RESTRICTIONS=///"
+
+# Every entry malformed (the ERE does not compile): zero EFFECTIVE rules must
+# trip the zero-rules guard instead of rendering a map whose only live line
+# is /.*/ REJECT.
+check_fail recipients-all-malformed 2 \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=/[/"
 
 check_fail bad-tls-level 2 \
   RELAY_HOST=smtp.example.com \

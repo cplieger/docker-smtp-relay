@@ -94,9 +94,9 @@ apply_defaults() {
   fi
   : "${MESSAGE_SIZE_LIMIT:=10240000}"
   # Use an FQDN-shaped default so Postfix does not emit `numeric hostname`
-  # warnings and receiving MTAs that validate HELO accept the relay. Set a
-  # matching `hostname: smtp-relay.local` on the compose service to keep the
-  # container and Postfix identity aligned.
+  # warnings and receiving MTAs that validate HELO accept the relay. Postfix's
+  # identity comes solely from this env var (rendered as myhostname); the
+  # container hostname is never read.
   : "${SMTP_HOSTNAME:=smtp-relay.local}"
   : "${STARTUP_PROBE:=true}"
   : "${STARTUP_PROBE_TIMEOUT:=5}"

@@ -27,15 +27,22 @@ emit_rcpt_line() {
 }
 
 # emit_regexp_recipient_rule ENTRY — render one /.../ regexp-literal token.
-# Test-compiles the pattern with grep -E (musl regcomp, the same regex engine
-# Postfix's regexp: tables link against in this image). dict_regexp ignores an
+# Test-compiles the pattern with grep -E (BusyBox grep links the same musl
+# regcomp Postfix's regexp: tables use in this image). dict_regexp ignores an
 # uncompilable line at map-open time with only a maillog warning, so the
 # intended allow rule silently vanishes and the /.*/ REJECT terminator rejects
-# that mail; surface it at deploy time. grep exit >1 = bad pattern (0/1 =
-# pattern compiled). Log-only: never rejects the config.
+# that mail; surface it at deploy time. BusyBox grep reports a bad ERE as a
+# SILENT exit 1 — the same status as valid-but-no-match — so a plain probe
+# cannot distinguish them; the alternation probe below can: "(P)|^probe$"
+# against input "probe" matches (exit 0) whenever P compiles, and fails to
+# compile (exit 1 BusyBox / exit 2 GNU) whenever P is invalid. Warn arms
+# still warn and emit the line unchanged, but return 10 (ineffective) so the
+# entry no longer satisfies the zero-rules guard — an all-malformed list is
+# now fatal there (2026-07 decision).
 emit_regexp_recipient_rule() {
   _rcpt_pat=${1#/}
   _rcpt_pat=${_rcpt_pat%/}
+  _rcpt_status=0
   # Postfix's dict_regexp ends the pattern at the FIRST unescaped /, so any
   # entry beginning with // (//, ///, //foo/) has an EMPTY effective pattern
   # even when the shell strip above leaves text. An empty pattern compiles as
@@ -53,11 +60,10 @@ emit_regexp_recipient_rule() {
       exit 2
       ;;
   esac
-  _rcpt_grc=0
-  printf '' | grep -E -e "$_rcpt_pat" >/dev/null 2>&1 || _rcpt_grc=$?
-  if [ "$_rcpt_grc" -gt 1 ]; then
+  if ! printf 'probe\n' | grep -E -e "(${_rcpt_pat})|^probe\$" >/dev/null 2>&1; then
     printf 'level=warn msg="recipient restriction regex does not compile; Postfix will ignore this rule and matching recipients will be rejected" pattern="%s"\n' \
       "$(sanitize_token "$_rcpt_pat")" >&2
+    _rcpt_status=10
   fi
   # The grep compile check cannot see the delimiter contract: an unescaped /
   # inside the pattern (e.g. /a/b/) is a valid ERE but terminates the Postfix
@@ -69,15 +75,21 @@ emit_regexp_recipient_rule() {
     */*)
       printf 'level=warn msg="recipient restriction regex contains an unescaped /; Postfix parses / as the pattern delimiter and will ignore this rule" pattern="%s"\n' \
         "$(sanitize_token "$_rcpt_pat")" >&2
+      _rcpt_status=10
       ;;
   esac
   emit_rcpt_line "$1 OK"
+  return "$_rcpt_status"
 }
 
 # emit_recipient_rule ENTRY — classify one RECIPIENT_RESTRICTIONS token
 # (regexp literal, full address, or domain) and append its rendered rule via
 # emit_rcpt_line. Shares the _rcpt_tmp contract with build_recipient_filter:
-# fatal branches remove the temp file and exit 2.
+# fatal branches remove the temp file and exit 2. Returns 0 for an effective
+# rule; the regexp arm is its case arm's last command, so it propagates
+# emit_regexp_recipient_rule's ineffective status (10). The address/domain
+# arms end in emit_rcpt_line and keep returning 0 (their warns are shape
+# hints, not load failures).
 emit_recipient_rule() {
   case "$1" in
     *[[:space:]]*)
@@ -133,15 +145,21 @@ build_recipient_filter() {
     _rcpt_tmp=$(create_rendered_tmp "$_rcpt_file" recipient_access) || exit 1
     _rule_count=0
     for _entry in $RECIPIENT_RESTRICTIONS; do
-      emit_recipient_rule "$_entry"
-      _rule_count=$((_rule_count + 1))
+      # Invoked as a condition: a bare call returning the ineffective status
+      # (10) would abort the script under set -e. The rule line is emitted
+      # either way; only effective entries advance the count.
+      if emit_recipient_rule "$_entry"; then
+        _rule_count=$((_rule_count + 1))
+      fi
     done
     # Refuse to proceed if a non-empty RECIPIENT_RESTRICTIONS parses to zero
-    # rules (whitespace-only value from a quoting bug or empty-var expansion).
-    # Without this guard the file ends up containing only `/.*/ REJECT`, Postfix
-    # rejects 100% of mail, and the healthcheck still reports green.
+    # EFFECTIVE rules: whitespace-only value (quoting bug, empty-var
+    # expansion) or every entry malformed (warned above; Postfix drops each
+    # at map-open). Without this guard the map's only live line is
+    # `/.*/ REJECT`, Postfix rejects 100% of mail, and the healthcheck still
+    # reports green.
     if [ "$_rule_count" -eq 0 ]; then
-      printf 'level=error msg="RECIPIENT_RESTRICTIONS is non-empty but parsed zero rules (whitespace only?); refusing to reject all mail"\n' >&2
+      printf 'level=error msg="RECIPIENT_RESTRICTIONS is non-empty but parsed zero effective rules (whitespace only, or every entry malformed?); refusing to reject all mail"\n' >&2
       rm -f "$_rcpt_tmp"
       exit 2
     fi
@@ -149,8 +167,10 @@ build_recipient_filter() {
     promote_rendered_file "$_rcpt_tmp" "$_rcpt_file" recipient_access
     # shellcheck disable=SC2034 # consumed by caller after sourcing
     SMTPD_RECIPIENT_RESTRICTIONS="check_recipient_access regexp:${_rcpt_file}, reject"
-    # Count only operator-supplied allow rules; the trailing /.*/ REJECT terminator
-    # is an internal implementation detail and would confuse operators reading Loki.
+    # Count only EFFECTIVE operator-supplied allow rules (entries Postfix
+    # will actually load; warned-ineffective ones are excluded), never the
+    # trailing /.*/ REJECT terminator — an internal implementation detail
+    # that would confuse operators reading Loki.
     printf 'level=info msg="recipient filtering configured" rules=%d\n' \
       "$_rule_count" >&2
   fi
