@@ -44,7 +44,7 @@ readonly MAIN_CF="${CONF_DIR}/main.cf"
 # RELAY_LOGIN              string    ""                   no whitespace or colons
 # RELAY_PASSWORD           string    ""                   no whitespace
 # RECIPIENT_RESTRICTIONS   string    ""                   space-separated; addresses, domains, or /regex/
-# SMTP_TLS_SECURITY_LEVEL  enum      secure               one of $TLS_LEVELS (see validate.sh)
+# SMTP_TLS_SECURITY_LEVEL  enum      secure               one of $TLS_LEVELS (see validate.sh); not none/may with RELAY_PORT=465
 # MESSAGE_SIZE_LIMIT       integer   10240000             max 104857600 (100 MB)
 # SMTP_HOSTNAME            string    smtp-relay.local     FQDN recommended (shape not enforced); no newlines/metacharacters
 # STARTUP_PROBE            enum      true                 true|false; fail-soft upstream TCP check
@@ -230,6 +230,23 @@ validate_relay_acceptance() {
         ;;
     esac
   fi
+
+  # RELAY_PORT=465 is the documented implicit-TLS port (the render turns on
+  # smtp_tls_wrappermode, see compute_tls_wrappermode): the upstream opens
+  # with a TLS handshake, so a disabled (none) or opportunistic (may) TLS
+  # level contradicts the contract — the wrapped connection is mandatory TLS
+  # and such a config could never have delivered mail. Reject it instead of
+  # rendering a dead relay. (Numeric -eq: RELAY_PORT is already validated
+  # numeric and in range, and -eq also matches a leading-zero spelling.)
+  if [ "$RELAY_PORT" -eq 465 ]; then
+    case "$SMTP_TLS_SECURITY_LEVEL" in
+      none | may)
+        printf 'level=error msg="RELAY_PORT=465 is implicit TLS; SMTP_TLS_SECURITY_LEVEL must be encrypt or stronger" tls_level=%s\n' \
+          "$SMTP_TLS_SECURITY_LEVEL" >&2
+        exit 2
+        ;;
+    esac
+  fi
 }
 
 # validate_runtime_config — runtime toggles and the filesystem contract.
@@ -277,6 +294,22 @@ compute_relayhost() {
     *) RELAYHOST_BRACKETED="[$RELAY_HOST]" ;;
   esac
   RELAYHOST_VALUE="${RELAYHOST_BRACKETED}:${RELAY_PORT}"
+}
+
+# ---------------------------------------------------------------------------
+# compute_tls_wrappermode — derive smtp_tls_wrappermode from RELAY_PORT.
+# Port 465 is implicit TLS (RFC 8314): Postfix must open the connection with
+# a TLS handshake instead of the plaintext SMTP/STARTTLS exchange, or the
+# upstream never answers and every message sits deferred while the inbound
+# healthcheck stays green. Any other port keeps the STARTTLS default (no).
+# Numeric -eq, matching the 465 guard in validate_relay_acceptance.
+# ---------------------------------------------------------------------------
+compute_tls_wrappermode() {
+  if [ "$RELAY_PORT" -eq 465 ]; then
+    SMTP_TLS_WRAPPERMODE="yes"
+  else
+    SMTP_TLS_WRAPPERMODE="no"
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -386,6 +419,7 @@ smtp_sasl_tls_security_options = noanonymous
 smtp_sasl_mechanism_filter = plain, login
 
 smtp_tls_security_level = ${SMTP_TLS_SECURITY_LEVEL}
+smtp_tls_wrappermode = ${SMTP_TLS_WRAPPERMODE}
 smtp_tls_CAfile = /etc/ssl/certs/ca-certificates.crt
 smtp_tls_session_cache_database = btree:\${data_directory}/smtp_scache
 smtp_tls_protocols = >=TLSv1.2
@@ -422,6 +456,7 @@ render_config() {
   apply_defaults
   validate_config
   compute_relayhost
+  compute_tls_wrappermode
   compute_mynetworks
   compute_sasl_state
   # Sets SMTPD_RECIPIENT_RESTRICTIONS and writes $CONF_DIR/recipient_access.

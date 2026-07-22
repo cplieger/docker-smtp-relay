@@ -193,6 +193,18 @@ check_fail bad-tls-level 2 \
   RELAY_HOST=smtp.example.com \
   SMTP_TLS_SECURITY_LEVEL=bogus
 
+# RELAY_PORT=465 is implicit TLS (wrappermode); a disabled or opportunistic
+# TLS level contradicts that contract and must be rejected.
+check_fail implicit-tls-none 2 \
+  RELAY_HOST=smtp.example.com \
+  RELAY_PORT=465 \
+  SMTP_TLS_SECURITY_LEVEL=none
+
+check_fail implicit-tls-may 2 \
+  RELAY_HOST=smtp.example.com \
+  RELAY_PORT=465 \
+  SMTP_TLS_SECURITY_LEVEL=may
+
 check_fail relay-host-bracket-port 2 \
   "RELAY_HOST=[2001:db8::1]:587"
 
@@ -241,12 +253,27 @@ check_sanitize truncation "$(printf '%0600d' 0)" "$(printf '%0512d' 0)[truncated
 # check_relay_host_warn NAME VALUE WANT_WARN(0|1)
 check_relay_host_warn() {
   _name=$1
-  _stderr=$(
+  # Capture stderr via a temp file so the validator's exit status survives
+  # (a $(... || :) capture would erase it): a fatal validator result must
+  # fail the assertion rather than pass as "no warning emitted".
+  _stderr_file=$(mktemp)
+  if (
     # shellcheck source-path=SCRIPTDIR
     # shellcheck source=../validate.sh
     . "$ENTRYPOINT_DIR/validate.sh"
-    validate_relay_host_shape "$2" 2>&1 >/dev/null || :
-  )
+    validate_relay_host_shape "$2" >/dev/null 2>"$_stderr_file"
+  ); then
+    _rc=0
+  else
+    _rc=$?
+  fi
+  _stderr=$(cat "$_stderr_file")
+  rm -f "$_stderr_file"
+  if [ "$_rc" -ne 0 ]; then
+    printf 'FAIL %s: warning probe exited %d, expected 0 (stderr: %s)\n' "$_name" "$_rc" "$_stderr" >&2
+    fail=$((fail + 1))
+    return
+  fi
   case "$_stderr" in
     *'contains a colon but is not an IPv6 address'*) _warned=1 ;;
     *) _warned=0 ;;
