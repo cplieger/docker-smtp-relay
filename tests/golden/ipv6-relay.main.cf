@@ -11,10 +11,12 @@ relayhost = [2001:db8::1]:587
 
 smtp_sasl_auth_enable = no
 smtp_sasl_password_maps =
-smtp_sasl_security_options = noanonymous
+smtp_sasl_security_options = noanonymous, noplaintext
+smtp_sasl_tls_security_options = noanonymous
 smtp_sasl_mechanism_filter = plain, login
 
 smtp_tls_security_level = secure
+smtp_tls_wrappermode = no
 smtp_tls_CAfile = /etc/ssl/certs/ca-certificates.crt
 smtp_tls_session_cache_database = btree:${data_directory}/smtp_scache
 smtp_tls_protocols = >=TLSv1.2

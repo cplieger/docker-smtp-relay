@@ -24,8 +24,9 @@ runs. Three scripts are copied into `/usr/local/bin/` and run as a unit:
   the two modes.
 - `validate.sh` — pure validation helpers (`validate_no_newlines`,
   `validate_numeric`, `validate_no_metacharacters`, `validate_range`,
-  `validate_no_open_relay`, `validate_tls_level`, `validate_sasl_*`).
-  Sourced by the entrypoint; no side effects.
+  `validate_no_open_relay`, `validate_relay_host_shape`, `validate_tls_level`,
+  `validate_fingerprint_digest`, `validate_fingerprint_match`,
+  `validate_sasl_*`). Sourced by the entrypoint; no side effects.
 - `recipient-filter.sh` — builds `/etc/postfix/recipient_access` and sets
   `SMTPD_RECIPIENT_RESTRICTIONS` from `RECIPIENT_RESTRICTIONS`.
 

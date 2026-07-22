@@ -23,18 +23,70 @@ validate_no_newlines() {
   fi
 }
 
+# Rejection logs must not interpolate the raw rejected token: an arbitrary
+# value can carry a double quote (STARTUP_PROBE='bad"value' renders malformed
+# logfmt that can make Alloy's parsing stage drop the fields precisely when
+# startup fails). Log bounded context (var=NAME, valid="...") instead.
+# Where the token itself must stay diagnosable (per-entry network validators:
+# a multi-entry list needs to identify WHICH entry failed), route it through
+# sanitize_token and emit it as a quoted logfmt field.
+#
+# Validation policy -- which inputs are fatal, and which are the operator's:
+#   Tier 1 (always fatal, security): injection into rendered config (the
+#     newline/metacharacter checks), open-relay CIDR rejection, credential
+#     exposure (SASL field format; cleartext TLS with SASL), and any input
+#     that silently turns a configured restriction into allow-all (the
+#     empty / slash-leading recipient regex class).
+#   Tier 2 (fatal, documented contract): value combinations the app's own
+#     documented contract says can never function -- the implicit-TLS 465
+#     mandatory-level gate, the landed never-matching-shape escalations
+#     (whitespace-only / leading-zero / multi-slash network entries,
+#     leading-bracket RELAY_HOST defects), and the fingerprint-family
+#     checks (both-or-neither with level=fingerprint; per-token
+#     colon-separated-hex-pairs format with digest-matching pair count;
+#     sha256/sha512 digest allowlist). This set is CLOSED: each entry
+#     was an explicit user decision; new entries require the same.
+#   Tier 3 (operator's responsibility): syntactically-plausible but
+#     semantically-wrong values beyond those tiers (typo'd hostnames,
+#     host:port confusion, exotic never-matching shapes). The validator does
+#     NOT chase these per-shape: the existing warn arms (all shape
+#     heuristics; every $TLS_LEVELS entry is now fully supported, so no
+#     level-specific warn arms remain) are grandfathered-final, no new shape
+#     arms get added without a Tier 1/2 justification, and Postfix's own
+#     runtime diagnostics are the source of truth for them.
+
+# sanitize_token -- strip logfmt delimiters (backslash, double quote) and
+# control bytes (CR, VT, FF, ...), and bound the value to 512 bytes, so a
+# rejected raw value can be logged as a bounded, parseable logfmt field.
+# Values beyond the cap get a literal [truncated] marker appended.
+sanitize_token() {
+  printf '%.512s' "$1" | LC_ALL=C tr -d '\\"[:cntrl:]'
+  if [ "${#1}" -gt 512 ]; then
+    printf '[truncated]'
+  fi
+}
+# Shell integers are compared with test(1), which aborts with "Illegal
+# number" beyond LONG_MAX while an `if` swallows that error as "in range".
+# 18 digits is the widest count that can never exceed LONG_MAX (2^63-1 has
+# 19 digits). Single source of truth for the three length guards below.
+readonly MAX_INT_DIGITS=18
+
+# int_too_wide VALUE -- true when VALUE has more digits than test(1) can
+# compare safely. Callers log their own site-specific context.
+int_too_wide() { [ "${#1}" -gt "$MAX_INT_DIGITS" ]; }
+
 validate_numeric() {
   case "$2" in
     '' | *[!0-9]*)
-      printf 'level=error msg="env var must be a non-negative integer" var=%s value="%s"\n' "$1" "$2" >&2
+      printf 'level=error msg="env var must be a non-negative integer" var=%s\n' "$1" >&2
       return 1
       ;;
   esac
   # Reject values too long to compare as shell integers: test(1) aborts with
   # "Illegal number" beyond LONG_MAX, and validate_range's `if` silently
   # swallows that error and treats the value as in-range.
-  if [ "${#2}" -gt 18 ]; then
-    printf 'level=error msg="env var numeric value too large" var=%s value="%s"\n' "$1" "$2" >&2
+  if int_too_wide "$2"; then
+    printf 'level=error msg="env var numeric value too large" var=%s length=%d\n' "$1" "${#2}" >&2
     return 1
   fi
 }
@@ -50,6 +102,13 @@ validate_no_metacharacters() {
 
 # Validate that a numeric value falls within [min, max].
 # Usage: validate_range VAR_NAME VALUE MIN MAX
+# Precondition: VALUE has already passed validate_numeric. The spec table in
+# entrypoint.sh orders `num` before `range=` on every row, which is
+# load-bearing twice: a non-numeric or >18-digit value would make both test(1)
+# comparisons error out and the `if` would swallow that as "in range" (see the
+# length-guard comment in validate_numeric), and the raw value="%s"
+# interpolation below is exempt from the no-raw-token logging rule only
+# because the value is guaranteed digits-only here.
 validate_range() {
   if [ "$2" -lt "$3" ] || [ "$2" -gt "$4" ]; then
     printf 'level=error msg="env var out of range" var=%s value="%s" min=%s max=%s\n' "$1" "$2" "$3" "$4" >&2
@@ -57,13 +116,137 @@ validate_range() {
   fi
 }
 
+# warn_relay_host_colon_shape CANDIDATE DISPLAY -- shared colon classifier
+# for RELAY_HOST: warn when CANDIDATE looks like host:port rather than an
+# IPv6 address. Exactly one colon can never be IPv6 (even ::1 has two), so
+# it is host:port regardless of character set (192.0.2.10:587, deadbeef:587
+# -- both all-hex, both silent under the old check). Two or more colons:
+# plausibly IPv6; warn only on characters invalid in an IPv6 address (also
+# catches %zone ids). DISPLAY is the original value to log: bracketed
+# callers pass the bracket interior as CANDIDATE but the full value as
+# DISPLAY. A single copy of the message keeps the logfmt contract in one
+# place.
+warn_relay_host_colon_shape() {
+  _rh_candidate=$1
+  _rh_display=$2
+  case "$_rh_candidate" in
+    *:*)
+      _rh_hostport=1
+      case "${_rh_candidate#*:}" in
+        *:*)
+          case "$_rh_candidate" in
+            *[!0-9a-fA-F:.]*) ;;
+            *) _rh_hostport=0 ;;
+          esac
+          ;;
+      esac
+      if [ "$_rh_hostport" -eq 1 ]; then
+        printf 'level=warn msg="RELAY_HOST contains a colon but is not an IPv6 address (host:port?); the rendered relayhost will never resolve (put the port in RELAY_PORT)" relay_host="%s"\n' \
+          "$(sanitize_token "$_rh_display")" >&2
+      fi
+      ;;
+  esac
+}
+
+# validate_relay_host_shape VALUE -- shape check for RELAY_HOST. Two shape
+# classes pass the metacharacter checks (a colon must be allowed for bare
+# IPv6) but render a relayhost Postfix cannot use, deferring all mail at
+# first send with only a maillog error:
+#   - bracket defects ([host]:587, [host, [], [[host]], [host]:587]):
+#     compute_relayhost trusts the leading bracket and appends :$RELAY_PORT
+#     verbatim, rendering [host]:587:587, an unbalanced bracket, or a
+#     malformed literal. No legitimate RELAY_HOST ever matches these
+#     shapes, so they are fatal (return 1; the caller exits 2).
+#   - a host:port value (smtp.example.com:587): the colon-bearing value is
+#     bracketed whole, rendering [smtp.example.com:587]:587, an address
+#     literal that never resolves (a hostname cannot contain a colon; only
+#     an IPv6 address legitimately does). Warn-only: this arm is a
+#     heuristic an exotic value could trip, so rejecting it would be a
+#     config-acceptance change.
+validate_relay_host_shape() {
+  case "$1" in
+    \[*\])
+      # Outer brackets alone are not proof of a well-formed literal: strip
+      # them and reject when the interior is empty or still contains a
+      # bracket ([], [[host]], [host]:587] -- compute_relayhost trusts the
+      # leading bracket, so the rendered relayhost is malformed).
+      _rh_inner=${1#\[}
+      _rh_inner=${_rh_inner%\]}
+      case "$_rh_inner" in
+        '' | *\[* | *\]*)
+          printf 'level=error msg="RELAY_HOST has malformed brackets; the rendered relayhost would be malformed and Postfix would defer all mail (use a single [host] literal and put the port in RELAY_PORT)" relay_host="%s"\n' \
+            "$(sanitize_token "$1")" >&2
+          return 1
+          ;;
+      esac
+      # The bracket interior still needs the colon-shape classifier:
+      # [smtp.example.com:587] is a host:port value bracketed whole, and
+      # compute_relayhost appends :$RELAY_PORT, rendering
+      # [smtp.example.com:587]:587 -- a literal that never resolves.
+      warn_relay_host_colon_shape "$_rh_inner" "$1"
+      return 0
+      ;;
+    \[*)
+      printf 'level=error msg="RELAY_HOST is bracketed but does not end with ]; the rendered relayhost would be malformed and Postfix would defer all mail (put the port in RELAY_PORT, not RELAY_HOST)" relay_host="%s"\n' \
+        "$(sanitize_token "$1")" >&2
+      return 1
+      ;;
+    *\[* | *\]*)
+      # A bracket anywhere in a non-bracket-leading value renders a malformed
+      # relayhost ([host]]:587): no legitimate hostname or IPv6 address
+      # contains a stray bracket. Deliberately warn-only: Tier 3 of the
+      # validation policy in the header (grandfathered-final warn arm).
+      printf 'level=warn msg="RELAY_HOST contains a stray bracket; the rendered relayhost will be malformed and Postfix will defer all mail" relay_host="%s"\n' \
+        "$(sanitize_token "$1")" >&2
+      ;;
+  esac
+  warn_relay_host_colon_shape "$1" "$1"
+  return 0
+}
+
 validate_ipv6_cidr() {
   _net=$1
   _prefix=$2
   if [ "$_prefix" -gt 128 ]; then
-    printf 'level=error msg="IPv6 prefix out of range" network=%s prefix=%s\n' "$_net" "$_prefix" >&2
+    printf 'level=error msg="IPv6 prefix out of range" network="%s" prefix=%s\n' "$(sanitize_token "$_net")" "$_prefix" >&2
     return 1
   fi
+  # A second / in the entry (fd00::/8/9) survives the prefix parse: the
+  # trailing /9 becomes the prefix and the address part keeps /8, so
+  # compute_mynetworks renders [fd00::/8]/9 -- Postfix logs a "bad
+  # net/mask pattern" warning and the entry never matches, silently
+  # excluding the operator's IPv6 LAN. Fatal, restoring parity with the
+  # IPv4 arm, which rejects the same shape (the embedded / makes an
+  # octet non-numeric).
+  # Postfix mynetworks format allows an already-bracketed IPv6 entry
+  # ([fd00::]/8, per postconf(5)); compute_mynetworks passes it through
+  # verbatim, so it is a valid, matching shape. Strip the brackets before
+  # the shape checks so the invalid-character arm does not false-warn
+  # "never match" on it; the inner address still gets the check.
+  _v6_addr="${_net%/*}"
+  case "$_v6_addr" in
+    \[*\])
+      _v6_addr="${_v6_addr#\[}"
+      _v6_addr="${_v6_addr%\]}"
+      ;;
+  esac
+  case "$_v6_addr" in
+    */*)
+      printf 'level=error msg="IPv6 network entry contains multiple / separators; Postfix would log a bad net/mask pattern and this network would never match, silently excluding the intended LAN" network="%s"\n' \
+        "$(sanitize_token "$_net")" >&2
+      return 1
+      ;;
+    *[!0-9a-fA-F:.]*)
+      # Postfix expands $name in main.cf parameter values (postconf(5)), so a
+      # non-address character (e.g. $) is rewritten by config-parameter
+      # expansion before the net/mask parse; either way the rendered entry is
+      # a bad net/mask pattern that never matches, silently excluding the
+      # intended LAN. Warn-only: rejecting it would be a config-acceptance
+      # change (the multi-slash arm above is fatal by explicit user decision).
+      printf 'level=warn msg="IPv6 network entry contains characters invalid in an IPv6 address; this network will never match (a $ is expanded as a Postfix config parameter)" network="%s"\n' \
+        "$(sanitize_token "$_net")" >&2
+      ;;
+  esac
 }
 
 validate_ipv4_cidr() {
@@ -71,29 +254,57 @@ validate_ipv4_cidr() {
   _ip=$2
   _prefix=$3
   if [ "$_prefix" -gt 32 ]; then
-    printf 'level=error msg="IPv4 prefix out of range" network=%s prefix=%s\n' "$_net" "$_prefix" >&2
+    printf 'level=error msg="IPv4 prefix out of range" network="%s" prefix=%s\n' "$(sanitize_token "$_net")" "$_prefix" >&2
     return 1
   fi
+  # POSIX field splitting drops a trailing empty field, so "192.168.1.2./24"
+  # would split into four valid octets and pass; reject the trailing dot the
+  # split cannot see (leading and doubled dots already yield an empty octet
+  # the per-octet check catches).
+  case "$_ip" in
+    *.)
+      printf 'level=error msg="IPv4 address has a trailing dot" network="%s"\n' "$(sanitize_token "$_net")" >&2
+      return 1
+      ;;
+  esac
   _oldIFS=$IFS
   IFS=.
   # shellcheck disable=SC2086
   set -- $_ip
   IFS=$_oldIFS
   if [ $# -ne 4 ]; then
-    printf 'level=error msg="IPv4 address must have 4 octets" network=%s\n' "$_net" >&2
+    printf 'level=error msg="IPv4 address must have 4 octets" network="%s"\n' "$(sanitize_token "$_net")" >&2
     return 1
   fi
   for _oct; do
     case "$_oct" in
       '' | *[!0-9]*)
-        printf 'level=error msg="IPv4 octet not numeric" network=%s octet="%s"\n' "$_net" "$_oct" >&2
+        printf 'level=error msg="IPv4 octet not numeric" network="%s" octet="%s"\n' "$(sanitize_token "$_net")" "$(sanitize_token "$_oct")" >&2
         return 1
         ;;
     esac
-    if [ "$_oct" -gt 255 ]; then
-      printf 'level=error msg="IPv4 octet out of range" network=%s octet=%s\n' "$_net" "$_oct" >&2
+    # Same LONG_MAX guard as validate_numeric; see int_too_wide.
+    if int_too_wide "$_oct"; then
+      printf 'level=error msg="IPv4 octet too large" network="%s" length=%d\n' "$(sanitize_token "$_net")" "${#_oct}" >&2
       return 1
     fi
+    if [ "$_oct" -gt 255 ]; then
+      printf 'level=error msg="IPv4 octet out of range" network="%s" octet=%s\n' "$(sanitize_token "$_net")" "$_oct" >&2
+      return 1
+    fi
+    # Postfix's network parser (inet_pton-based) rejects leading-zero octets
+    # at runtime ("bad network value ... skipping this rule", verified against
+    # the shipped image), so the entry never matches and the intended LAN is
+    # silently excluded while validation stays green. Fatal by explicit user
+    # decision (same posture as the IPv6 multi-slash arm), restoring parity
+    # with the other IPv4 shape rejections above.
+    case "$_oct" in
+      0[0-9]*)
+        printf 'level=error msg="IPv4 octet has a leading zero; Postfix rejects this network entry at runtime (bad network value) and it would never match, silently excluding the intended LAN" network="%s" octet=%s\n' \
+          "$(sanitize_token "$_net")" "$_oct" >&2
+        return 1
+        ;;
+    esac
   done
 }
 
@@ -101,23 +312,29 @@ validate_no_open_relay() {
   for _net in $1; do
     case "$_net" in
       0.0.0.0/0 | ::/0)
-        printf 'level=error msg="network list contains open-relay CIDR" network=%s\n' "$_net" >&2
+        # Exact-matched literal (0.0.0.0/0 or ::/0), sanitized for uniformity.
+        printf 'level=error msg="network list contains open-relay CIDR" network="%s"\n' "$(sanitize_token "$_net")" >&2
         return 1
         ;;
     esac
     _prefix="${_net##*/}"
     if [ "$_prefix" = "$_net" ]; then
-      printf 'level=error msg="network entry missing CIDR prefix" network=%s\n' "$_net" >&2
+      printf 'level=error msg="network entry missing CIDR prefix" network="%s"\n' "$(sanitize_token "$_net")" >&2
       return 1
     fi
     case "$_prefix" in
       '' | *[!0-9]*)
-        printf 'level=error msg="network entry has non-numeric prefix" network=%s\n' "$_net" >&2
+        printf 'level=error msg="network entry has non-numeric prefix" network="%s"\n' "$(sanitize_token "$_net")" >&2
         return 1
         ;;
     esac
+    # Same LONG_MAX guard as validate_numeric; see int_too_wide.
+    if int_too_wide "$_prefix"; then
+      printf 'level=error msg="network CIDR prefix too large" network="%s" length=%d\n' "$(sanitize_token "$_net")" "${#_prefix}" >&2
+      return 1
+    fi
     if [ "$_prefix" -lt 8 ]; then
-      printf 'level=error msg="network CIDR too broad (min /8)" network=%s prefix=%s\n' "$_net" "$_prefix" >&2
+      printf 'level=error msg="network CIDR too broad (min /8)" network="%s" prefix=%s\n' "$(sanitize_token "$_net")" "$_prefix" >&2
       return 1
     fi
 
@@ -125,14 +342,15 @@ validate_no_open_relay() {
     # notice -- wrong octet count (192.168.1/24), out-of-range octets
     # (192.168.1.300/24), or non-numeric octets -- that would silently exclude
     # the intended LAN from relaying. IPv4 requires four dotted octets each
-    # 0-255. IPv6 is detected by `:`
-    # and delegated to Postfix for per-group validation.
+    # 0-255. IPv6 is detected by `:`: validate_ipv6_cidr fatally rejects
+    # multi-slash entries and warns on invalid address characters; per-group
+    # (hextet) validation stays delegated to Postfix.
     _ip="${_net%/*}"
     case "$_ip" in
       *:*) validate_ipv6_cidr "$_net" "$_prefix" || return 1 ;;
       *.*.*.*) validate_ipv4_cidr "$_net" "$_ip" "$_prefix" || return 1 ;;
       *)
-        printf 'level=error msg="unrecognized network format" network=%s\n' "$_net" >&2
+        printf 'level=error msg="unrecognized network format" network="%s"\n' "$(sanitize_token "$_net")" >&2
         return 1
         ;;
     esac
@@ -146,8 +364,76 @@ validate_tls_level() {
   for _lvl in $TLS_LEVELS; do
     [ "$1" = "$_lvl" ] && return 0
   done
-  printf 'level=error msg="invalid TLS security level" value="%s" valid="%s"\n' "$1" "$TLS_LEVELS" >&2
+  # The rejected value is unvalidated input; do not interpolate it (logfmt
+  # quoting) — the allowlist is enough context to fix the config.
+  printf 'level=error msg="invalid TLS security level" var=SMTP_TLS_SECURITY_LEVEL valid="%s"\n' "$TLS_LEVELS" >&2
   return 1
+}
+
+# validate_fingerprint_digest VALUE -- allowlist for
+# SMTP_TLS_FINGERPRINT_DIGEST. sha256 and sha512 only: md5 and sha1 are
+# rejected to match this image's security posture (it already narrows
+# upstream Postfix defaults to >=TLSv1.2 and high ciphers), and a
+# collision-weak digest as the sole trust anchor defeats the point of
+# fingerprint pinning.
+validate_fingerprint_digest() {
+  case "$1" in
+    sha256 | sha512) return 0 ;;
+  esac
+  # The rejected value is unvalidated input; do not interpolate it (logfmt
+  # quoting) — the allowlist is enough context to fix the config.
+  printf 'level=error msg="invalid fingerprint digest (md5/sha1 are rejected: collision-weak digests cannot anchor trust)" var=SMTP_TLS_FINGERPRINT_DIGEST valid="sha256 sha512"\n' >&2
+  return 1
+}
+
+# validate_fingerprint_match MATCH DIGEST -- format check for
+# SMTP_TLS_FINGERPRINT_CERT_MATCH (Tier 2, explicit user decision). Postfix
+# compares each configured digest against the peer certificate/public-key
+# digest as colon-separated hex pairs (postconf(5)
+# smtp_tls_fingerprint_cert_match); a token in any other shape -- non-hex
+# characters, missing/doubled colons, or a pair count that does not match
+# the digest length (sha256 = 32 pairs, sha512 = 64) -- can never match any
+# peer, so the level=fingerprint relay would defer every delivery with
+# maillog-only diagnostics. Deterministic never-match => fatal.
+validate_fingerprint_match() {
+  # Copy both args up front: the pair count below repurposes the positional
+  # parameters via `set --`.
+  _fm_match=$1
+  _fm_digest=$2
+  _fm_want_pairs=32
+  [ "$_fm_digest" = sha512 ] && _fm_want_pairs=64
+  for _fm_token in $_fm_match; do
+    # Reject shapes the colon split below cannot see: a leading, trailing,
+    # or doubled colon yields an empty pair that POSIX field splitting can
+    # drop (a trailing colon would otherwise pass with a correct count).
+    case "$_fm_token" in
+      *[!0-9a-fA-F:]* | :* | *: | *::*)
+        printf 'level=error msg="fingerprint match token is not colon-separated hex pairs; it can never match any peer and every delivery would defer" var=SMTP_TLS_FINGERPRINT_CERT_MATCH token="%s"\n' \
+          "$(sanitize_token "$_fm_token")" >&2
+        return 1
+        ;;
+    esac
+    _oldIFS=$IFS
+    IFS=:
+    # shellcheck disable=SC2086
+    set -- $_fm_token
+    IFS=$_oldIFS
+    if [ $# -ne "$_fm_want_pairs" ]; then
+      printf 'level=error msg="fingerprint match token has wrong digest length; it can never match any peer and every delivery would defer" var=SMTP_TLS_FINGERPRINT_CERT_MATCH token="%s" pairs=%d want_pairs=%d digest=%s\n' \
+        "$(sanitize_token "$_fm_token")" "$#" "$_fm_want_pairs" "$_fm_digest" >&2
+      return 1
+    fi
+    for _fm_pair; do
+      case "$_fm_pair" in
+        [0-9a-fA-F][0-9a-fA-F]) ;;
+        *)
+          printf 'level=error msg="fingerprint match token has a malformed hex pair; it can never match any peer and every delivery would defer" var=SMTP_TLS_FINGERPRINT_CERT_MATCH token="%s"\n' \
+            "$(sanitize_token "$_fm_token")" >&2
+          return 1
+          ;;
+      esac
+    done
+  done
 }
 
 # Reject SASL credentials that would break the sasl_passwd field format

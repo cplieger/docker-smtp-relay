@@ -62,6 +62,14 @@ check_ok() {
       printf 'FAIL %s: recipient_access differs from golden\n' "$_name" >&2
       _ok=0
     fi
+  elif [ "$RECORD" = "1" ]; then
+    # Keep regeneration symmetric: a golden case that no longer produces the
+    # optional recipient_access artifact must have its obsolete fixture
+    # removed, or the very next normal run fails on the stale file.
+    rm -f "$GOLDEN_DIR/$_name.recipient_access"
+  elif [ -f "$GOLDEN_DIR/$_name.recipient_access" ]; then
+    printf 'FAIL %s: golden recipient_access exists but render produced none\n' "$_name" >&2
+    _ok=0
   fi
 
   if [ "$_ok" = "1" ]; then
@@ -111,6 +119,10 @@ check_ok recipients \
 check_ok ipv6-relay \
   RELAY_HOST=2001:db8::1
 
+check_ok ipv6-networks \
+  RELAY_HOST=smtp.example.com \
+  "ACCEPTED_NETWORKS=192.168.0.0/16 fd00::/8"
+
 check_ok custom-port-tls \
   RELAY_HOST=smtp.example.com \
   RELAY_PORT=465 \
@@ -118,6 +130,28 @@ check_ok custom-port-tls \
   MESSAGE_SIZE_LIMIT=41943040 \
   ACCEPTED_NETWORKS=10.10.0.0/16 \
   SMTP_HOSTNAME=relay.example.com
+
+# dane obtains TLS policy from DNSSEC-validated TLSA records; the render must
+# add smtp_dns_support_level = dnssec (postconf(5): DANE is disabled at the
+# default dns support level) while keeping STARTTLS wrappermode off.
+check_ok dane-relay \
+  RELAY_HOST=smtp.example.com \
+  SMTP_TLS_SECURITY_LEVEL=dane
+
+# dane-only is a mandatory level, so it satisfies implicit TLS on 465:
+# dnssec support line plus wrappermode = yes.
+check_ok dane-only-465 \
+  RELAY_HOST=smtp.example.com \
+  RELAY_PORT=465 \
+  SMTP_TLS_SECURITY_LEVEL=dane-only
+
+# fingerprint renders the operator's trust anchors (space-separated tokens of
+# colon-separated hex pairs) and the digest — explicit even at the sha256
+# default, for auditability. No dnssec line.
+check_ok fingerprint-relay \
+  RELAY_HOST=smtp.example.com \
+  SMTP_TLS_SECURITY_LEVEL=fingerprint \
+  "SMTP_TLS_FINGERPRINT_CERT_MATCH=00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99"
 
 # --- Rejected configurations (exit 2) -------------------------------------
 check_fail no-relay-host 2 \
@@ -130,6 +164,26 @@ check_fail open-relay 2 \
 check_fail bad-port 2 \
   RELAY_HOST=smtp.example.com \
   RELAY_PORT=70000
+
+check_fail bad-network-trailing-dot 2 \
+  RELAY_HOST=smtp.example.com \
+  ACCEPTED_NETWORKS=192.168.1.2./24
+
+check_fail ipv6-multi-slash 2 \
+  RELAY_HOST=smtp.example.com \
+  "ACCEPTED_NETWORKS=192.168.0.0/16 fd00::/8/9"
+
+check_fail networks-whitespace 2 \
+  RELAY_HOST=smtp.example.com \
+  "ACCEPTED_NETWORKS= "
+
+check_fail networks-empty 2 \
+  RELAY_HOST=smtp.example.com \
+  ACCEPTED_NETWORKS=
+
+check_fail networks-leading-zero-octet 2 \
+  RELAY_HOST=smtp.example.com \
+  ACCEPTED_NETWORKS=192.168.010.0/24
 
 check_fail sasl-cleartext 2 \
   RELAY_HOST=smtp.example.com \
@@ -145,9 +199,167 @@ check_fail recipients-whitespace 2 \
   RELAY_HOST=smtp.example.com \
   "RECIPIENT_RESTRICTIONS=   "
 
+check_fail recipients-carriage-return 2 \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=$(printf '\r')"
+
+check_fail recipients-empty-regex 2 \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=//"
+
+check_fail recipients-slash-leading-regex 2 \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=///"
+
 check_fail bad-tls-level 2 \
   RELAY_HOST=smtp.example.com \
   SMTP_TLS_SECURITY_LEVEL=bogus
+
+# RELAY_PORT=465 is implicit TLS (wrappermode); a disabled or opportunistic
+# TLS level contradicts that contract and must be rejected.
+check_fail implicit-tls-none 2 \
+  RELAY_HOST=smtp.example.com \
+  RELAY_PORT=465 \
+  SMTP_TLS_SECURITY_LEVEL=none
+
+check_fail implicit-tls-may 2 \
+  RELAY_HOST=smtp.example.com \
+  RELAY_PORT=465 \
+  SMTP_TLS_SECURITY_LEVEL=may
+
+# dane is opportunistic-family: without usable TLSA records it degrades to
+# may, which wrappermode cannot satisfy (Postfix requires encrypt or
+# stronger for implicit TLS).
+check_fail implicit-tls-dane 2 \
+  RELAY_HOST=smtp.example.com \
+  RELAY_PORT=465 \
+  SMTP_TLS_SECURITY_LEVEL=dane
+
+# The fingerprint-family vars are both-or-neither with level=fingerprint
+# (mirrors the RELAY_LOGIN/RELAY_PASSWORD contract): a fingerprint level
+# without a match can never deliver; a match or an explicit digest at any
+# other level is a silently-ignored trust anchor.
+check_fail fingerprint-no-match 2 \
+  RELAY_HOST=smtp.example.com \
+  SMTP_TLS_SECURITY_LEVEL=fingerprint
+
+check_fail fingerprint-whitespace-match 2 \
+  RELAY_HOST=smtp.example.com \
+  SMTP_TLS_SECURITY_LEVEL=fingerprint \
+  "SMTP_TLS_FINGERPRINT_CERT_MATCH= "
+
+check_fail fingerprint-match-wrong-level 2 \
+  RELAY_HOST=smtp.example.com \
+  SMTP_TLS_SECURITY_LEVEL=secure \
+  "SMTP_TLS_FINGERPRINT_CERT_MATCH=00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff"
+
+# Explicit digest at a non-fingerprint level (the level defaults to secure).
+check_fail fingerprint-digest-wrong-level 2 \
+  RELAY_HOST=smtp.example.com \
+  SMTP_TLS_FINGERPRINT_DIGEST=sha256
+
+# Wrong pair count for sha256 (32 pairs required): a deterministic
+# never-match token is fatal, not a warn.
+check_fail fingerprint-bad-token 2 \
+  RELAY_HOST=smtp.example.com \
+  SMTP_TLS_SECURITY_LEVEL=fingerprint \
+  SMTP_TLS_FINGERPRINT_CERT_MATCH=de:ad:be:ef
+
+# md5/sha1 digests are rejected (collision-weak; sha256/sha512 only).
+check_fail fingerprint-md5-digest 2 \
+  RELAY_HOST=smtp.example.com \
+  SMTP_TLS_SECURITY_LEVEL=fingerprint \
+  SMTP_TLS_FINGERPRINT_CERT_MATCH=00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff \
+  SMTP_TLS_FINGERPRINT_DIGEST=md5
+
+check_fail relay-host-bracket-port 2 \
+  "RELAY_HOST=[2001:db8::1]:587"
+
+check_fail relay-host-unbalanced-bracket 2 \
+  "RELAY_HOST=[2001:db8::1"
+
+check_fail relay-host-empty-brackets 2 \
+  "RELAY_HOST=[]"
+
+check_fail relay-host-inner-bracket 2 \
+  "RELAY_HOST=[2001:db8::1]:587]"
+
+# --- sanitize_token regression ---------------------------------------------
+# The golden harness only diffs rendered files and asserts exit codes; there
+# is no stderr-log assertion mechanism, so exercise the log-only sanitizer
+# directly by sourcing validate.sh in a subshell.
+# check_sanitize NAME INPUT EXPECTED
+check_sanitize() {
+  _name=$1
+  _got=$(
+    # shellcheck source-path=SCRIPTDIR
+    # shellcheck source=../validate.sh
+    . "$ENTRYPOINT_DIR/validate.sh"
+    sanitize_token "$2"
+  )
+  if [ "$_got" = "$3" ]; then
+    pass=$((pass + 1))
+  else
+    printf 'FAIL %s: sanitize_token produced "%s", expected "%s"\n' "$_name" "$_got" "$3" >&2
+    fail=$((fail + 1))
+  fi
+}
+
+# Control bytes (CR, VT) must be stripped so a rejection log line stays a
+# single parseable logfmt record.
+check_sanitize control-bytes "$(printf 'bad\r\vnet/24')" 'badnet/24'
+
+# The 512-byte cap must truncate and append the literal [truncated] marker
+# so a hostile oversized value cannot flood a single log line.
+check_sanitize truncation "$(printf '%0600d' 0)" "$(printf '%0512d' 0)[truncated]"
+
+# --- RELAY_HOST colon-shape warning ------------------------------------------
+# The host:port warning is log-only (the value still renders), so like
+# sanitize_token it is exercised by sourcing validate.sh and asserting on
+# stderr directly.
+# check_relay_host_warn NAME VALUE WANT_WARN(0|1)
+check_relay_host_warn() {
+  _name=$1
+  # Capture stderr via a temp file so the validator's exit status survives
+  # (a $(... || :) capture would erase it): a fatal validator result must
+  # fail the assertion rather than pass as "no warning emitted".
+  _stderr_file=$(mktemp)
+  if (
+    # shellcheck source-path=SCRIPTDIR
+    # shellcheck source=../validate.sh
+    . "$ENTRYPOINT_DIR/validate.sh"
+    validate_relay_host_shape "$2" >/dev/null 2>"$_stderr_file"
+  ); then
+    _rc=0
+  else
+    _rc=$?
+  fi
+  _stderr=$(cat "$_stderr_file")
+  rm -f "$_stderr_file"
+  if [ "$_rc" -ne 0 ]; then
+    printf 'FAIL %s: warning probe exited %d, expected 0 (stderr: %s)\n' "$_name" "$_rc" "$_stderr" >&2
+    fail=$((fail + 1))
+    return
+  fi
+  case "$_stderr" in
+    *'contains a colon but is not an IPv6 address'*) _warned=1 ;;
+    *) _warned=0 ;;
+  esac
+  if [ "$_warned" = "$3" ]; then
+    pass=$((pass + 1))
+  else
+    printf 'FAIL %s: warning emitted=%d, expected %d (stderr: %s)\n' "$_name" "$_warned" "$3" "$_stderr" >&2
+    fail=$((fail + 1))
+  fi
+}
+
+# A bracketed host:port value must warn just like the unbracketed form:
+# compute_relayhost appends :$RELAY_PORT, rendering [smtp.example.com:587]:587,
+# a literal that never resolves.
+check_relay_host_warn relay-host-bracketed-hostport '[smtp.example.com:587]' 1
+
+# A well-formed bracketed IPv6 literal must stay warning-free.
+check_relay_host_warn relay-host-bracketed-ipv6 '[2001:db8::1]' 0
 
 # --- Summary --------------------------------------------------------------
 printf 'render-test: %d passed, %d failed\n' "$pass" "$fail"

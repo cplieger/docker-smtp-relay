@@ -8,36 +8,132 @@
 # class uses ] first (POSIX requirement), escapes / because it is the Postfix
 # regexp delimiter, and uses # as the sed delimiter to avoid doubling slashes.
 # Both { and } are escaped together so the class stays symmetric and obviously
-# covers every PCRE metacharacter Postfix regexp supports.
+# covers every metacharacter of the POSIX regular expressions that Postfix
+# regexp: tables use (the class would also cover pcre: if the map type ever
+# changed).
 escape_postfix_regex() {
   printf '%s' "$1" | sed 's#[].[\\^$*+?(){}|/]#\\&#g'
+}
+
+# emit_rcpt_line LINE — append one rule line to the recipient_access temp
+# file, converting a write failure (ENOSPC, EROFS) into a structured
+# level=error plus temp-file cleanup instead of a raw set -e diagnostic.
+emit_rcpt_line() {
+  if ! printf '%s\n' "$1" >>"$_rcpt_tmp"; then
+    printf 'level=error msg="failed to write recipient_access (disk full or read-only?)" path="%s"\n' "$(sanitize_token "$_rcpt_tmp")" >&2
+    rm -f "$_rcpt_tmp"
+    exit 1
+  fi
+}
+
+# emit_regexp_recipient_rule ENTRY — render one /.../ regexp-literal token.
+# Test-compiles the pattern with grep -E (musl regcomp, the same regex engine
+# Postfix's regexp: tables link against in this image). dict_regexp ignores an
+# uncompilable line at map-open time with only a maillog warning, so the
+# intended allow rule silently vanishes and the /.*/ REJECT terminator rejects
+# that mail; surface it at deploy time. grep exit >1 = bad pattern (0/1 =
+# pattern compiled). Log-only: never rejects the config.
+emit_regexp_recipient_rule() {
+  _rcpt_pat=${1#/}
+  _rcpt_pat=${_rcpt_pat%/}
+  # Postfix's dict_regexp ends the pattern at the FIRST unescaped /, so any
+  # entry beginning with // (//, ///, //foo/) has an EMPTY effective pattern
+  # even when the shell strip above leaves text. An empty pattern compiles as
+  # a POSIX ERE that matches every string, so the rendered rule would allow
+  # ALL recipients before the /.*/ REJECT terminator (or dict_regexp drops
+  # the line as bad flags and matching mail is rejected) — the operator
+  # configured a restriction and silently got allow-all or reject-all. Fatal,
+  # matching the zero-rules guard's posture of refusing to render a map that
+  # allows or rejects all mail.
+  case "$1" in
+    //*)
+      printf 'level=error msg="recipient restriction regex is empty (Postfix ends the pattern at the first unescaped /) and would match all recipients; refusing to allow all mail" entry="%s"\n' \
+        "$(sanitize_token "$1")" >&2
+      rm -f "$_rcpt_tmp"
+      exit 2
+      ;;
+  esac
+  _rcpt_grc=0
+  printf '' | grep -E -e "$_rcpt_pat" >/dev/null 2>&1 || _rcpt_grc=$?
+  if [ "$_rcpt_grc" -gt 1 ]; then
+    printf 'level=warn msg="recipient restriction regex does not compile; Postfix will ignore this rule and matching recipients will be rejected" pattern="%s"\n' \
+      "$(sanitize_token "$_rcpt_pat")" >&2
+  fi
+  # The grep compile check cannot see the delimiter contract: an unescaped /
+  # inside the pattern (e.g. /a/b/) is a valid ERE but terminates the Postfix
+  # regexp-table pattern early, so dict_regexp drops the whole line at
+  # map-open with only a maillog warning. Strip backslash escapes first; any
+  # / left is an unescaped delimiter (escape_postfix_regex escapes / for
+  # exactly this reason in the literal arms).
+  case "$(printf '%s' "$_rcpt_pat" | sed 's#\\.##g')" in
+    */*)
+      printf 'level=warn msg="recipient restriction regex contains an unescaped /; Postfix parses / as the pattern delimiter and will ignore this rule" pattern="%s"\n' \
+        "$(sanitize_token "$_rcpt_pat")" >&2
+      ;;
+  esac
+  emit_rcpt_line "$1 OK"
+}
+
+# emit_recipient_rule ENTRY — classify one RECIPIENT_RESTRICTIONS token
+# (regexp literal, full address, or domain) and append its rendered rule via
+# emit_rcpt_line. Shares the _rcpt_tmp contract with build_recipient_filter:
+# fatal branches remove the temp file and exit 2.
+emit_recipient_rule() {
+  case "$1" in
+    *[[:space:]]*)
+      # Word splitting already consumed spaces, tabs, and line feeds, so
+      # residual whitespace here is CR/FF/VT — it would render a rule no
+      # real recipient matches, silently rejecting all mail.
+      printf 'level=error msg="recipient restriction contains invalid whitespace" entry="%s"\n' \
+        "$(sanitize_token "$1")" >&2
+      rm -f "$_rcpt_tmp"
+      exit 2
+      ;;
+    /*/) # already a Postfix regexp literal
+      emit_regexp_recipient_rule "$1"
+      ;;
+    *@*) # full address: anchor both ends
+      _esc=$(escape_postfix_regex "$1")
+      emit_rcpt_line "/^${_esc}\$/ OK"
+      ;;
+    *) # domain-only: anchor the @-suffix
+      # A domain can never contain a slash, so a slash-bearing token here
+      # is almost certainly a mis-typed regexp literal (e.g. `/foo`
+      # missing its closing delimiter). The escaped rule compiles but can
+      # never match a real recipient; surface that at deploy time.
+      # Warn-only: rejecting it would be a config-acceptance change.
+      case "$1" in
+        */*)
+          printf 'level=warn msg="recipient restriction looks like a mis-typed regexp (a domain cannot contain /); this rule will never match any recipient" entry="%s"\n' \
+            "$(sanitize_token "$1")" >&2
+          ;;
+        .*)
+          printf 'level=warn msg="recipient restriction domain starts with a dot (Postfix subdomain syntax is not supported by this regexp map; no address contains @.); this rule will never match any recipient" entry="%s"\n' \
+            "$(sanitize_token "$1")" >&2
+          ;;
+      esac
+      _esc=$(escape_postfix_regex "$1")
+      emit_rcpt_line "/@${_esc}\$/ OK"
+      ;;
+  esac
 }
 
 # build_recipient_filter — builds /etc/postfix/recipient_access from
 # RECIPIENT_RESTRICTIONS tokens and sets SMTPD_RECIPIENT_RESTRICTIONS.
 # Must be called (not subshelled) so the variable is visible to the caller.
+# The file is rendered to a mktemp file in CONF_DIR and mv'd into place
+# atomically only once the complete artifact is written, so Postfix never
+# sees a partial map and every failure path is a structured level=error.
 build_recipient_filter() {
   # shellcheck disable=SC2034 # consumed by caller after sourcing
   SMTPD_RECIPIENT_RESTRICTIONS="permit_mynetworks, reject"
 
   if [ -n "$RECIPIENT_RESTRICTIONS" ]; then
     _rcpt_file="${CONF_DIR}/recipient_access"
-    : >"$_rcpt_file"
+    _rcpt_tmp=$(create_rendered_tmp "$_rcpt_file" recipient_access) || exit 1
     _rule_count=0
     for _entry in $RECIPIENT_RESTRICTIONS; do
-      case "$_entry" in
-        /*/) # already a Postfix regexp literal
-          printf '%s OK\n' "$_entry" >>"$_rcpt_file"
-          ;;
-        *@*) # full address: anchor both ends
-          _esc=$(escape_postfix_regex "$_entry")
-          printf '/^%s$/ OK\n' "$_esc" >>"$_rcpt_file"
-          ;;
-        *) # domain-only: anchor the @-suffix
-          _esc=$(escape_postfix_regex "$_entry")
-          printf '/@%s$/ OK\n' "$_esc" >>"$_rcpt_file"
-          ;;
-      esac
+      emit_recipient_rule "$_entry"
       _rule_count=$((_rule_count + 1))
     done
     # Refuse to proceed if a non-empty RECIPIENT_RESTRICTIONS parses to zero
@@ -45,12 +141,12 @@ build_recipient_filter() {
     # Without this guard the file ends up containing only `/.*/ REJECT`, Postfix
     # rejects 100% of mail, and the healthcheck still reports green.
     if [ "$_rule_count" -eq 0 ]; then
-      printf 'level=error msg="RECIPIENT_RESTRICTIONS is non-empty but parsed zero rules (whitespace only?); refusing to reject all mail" value="%s"\n' \
-        "$RECIPIENT_RESTRICTIONS" >&2
-      rm -f "$_rcpt_file"
+      printf 'level=error msg="RECIPIENT_RESTRICTIONS is non-empty but parsed zero rules (whitespace only?); refusing to reject all mail"\n' >&2
+      rm -f "$_rcpt_tmp"
       exit 2
     fi
-    printf '/.*/ REJECT\n' >>"$_rcpt_file"
+    emit_rcpt_line '/.*/ REJECT'
+    promote_rendered_file "$_rcpt_tmp" "$_rcpt_file" recipient_access
     # shellcheck disable=SC2034 # consumed by caller after sourcing
     SMTPD_RECIPIENT_RESTRICTIONS="check_recipient_access regexp:${_rcpt_file}, reject"
     # Count only operator-supplied allow rules; the trailing /.*/ REJECT terminator

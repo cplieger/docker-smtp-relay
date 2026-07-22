@@ -45,7 +45,7 @@ services:
       RELAY_LOGIN: "your-relay-login"
       RELAY_PASSWORD: "your-relay-password"
       RELAY_PORT: "587"  # 587 = STARTTLS, 465 = implicit TLS
-      SMTP_TLS_SECURITY_LEVEL: "secure"  # secure (default), verify, encrypt, may, or none
+      SMTP_TLS_SECURITY_LEVEL: "secure"  # secure (default), verify, or encrypt; full list in the configuration table (may/none are rejected when SASL credentials are set)
       MESSAGE_SIZE_LIMIT: "10240000"  # in bytes, default 10 MB
       ACCEPTED_NETWORKS: "192.168.0.0/16"  # CIDRs that can relay mail
       RECIPIENT_RESTRICTIONS: ""
@@ -62,20 +62,56 @@ services:
 
 ### Environment variables
 
-| Variable                  | Description                                                                                                                                                                                                                                                                                                                                       | Default            | Required |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ | -------- |
-| `TZ`                      | Not configurable. The image omits `tzdata`, so all logs (Postfix maillog + the entrypoint's structured logs) are emitted in UTC — a single UTC timeline for Loki/Grafana ingestion. Setting `TZ` has no effect.                                                                                                                                   | `UTC`              | No       |
-| `RELAY_HOST`              | Upstream SMTP relay hostname; works with any provider (e.g. email-smtp.us-east-1.amazonaws.com for AWS SES, smtp.gmail.com for Gmail, smtp.mailgun.org for Mailgun)                                                                                                                                                                               | _none_             | Yes      |
-| `RELAY_LOGIN`             | SASL username for the upstream relay. Optional, but must be set together with RELAY_PASSWORD (set neither to relay without SASL, e.g. to an IP-authenticated smarthost). Most hosted providers (SES, Gmail, Mailgun) require both.                                                                                                                | -                  | No       |
-| `RELAY_PASSWORD`          | SASL password for the upstream relay. Optional; see RELAY_LOGIN (both-or-neither).                                                                                                                                                                                                                                                                | -                  | No       |
-| `RELAY_PORT`              | Upstream relay port (587 for STARTTLS, 465 for implicit TLS)                                                                                                                                                                                                                                                                                      | `587`              | No       |
-| `SMTP_TLS_SECURITY_LEVEL` | Outbound TLS level: `secure` (default; chain + hostname verification), `verify`, `encrypt`, `dane`/`dane-only`/`fingerprint`, `may`, or `none`. See the [Postfix TLS README](https://www.postfix.org/TLS_README.html). Prefer `secure`/`verify` when SASL (`RELAY_LOGIN`/`RELAY_PASSWORD`) is set; `encrypt` and weaker lack peer authentication. | `secure`           | No       |
-| `MESSAGE_SIZE_LIMIT`      | Maximum message size in bytes (default 10240000 = 10 MB, AWS SES supports up to 40 MB with limit increase)                                                                                                                                                                                                                                        | `10240000`         | No       |
-| `ACCEPTED_NETWORKS`       | Space-separated CIDRs allowed to send mail through this relay (default: 192.168.0.0/16). The entrypoint falls back to all RFC 1918 ranges if unset, but the shipped compose defaults to 192.168.0.0/16.                                                                                                                                           | `192.168.0.0/16`   | No       |
-| `RECIPIENT_RESTRICTIONS`  | Optional recipient filter; space-separated list of allowed email addresses, domains, or regex patterns. If set, only matching recipients are accepted; all others are rejected. Leave empty to allow all recipients.                                                                                                                              | ``                 | No       |
-| `SMTP_HOSTNAME`           | Postfix `myhostname` / HELO identity. Use an FQDN — some receiving MTAs reject non-FQDN HELO names. Validation rejects whitespace and shell metacharacters; it does not enforce FQDN shape.                                                                                                                                                       | `smtp-relay.local` | No       |
-| `STARTUP_PROBE`           | Run a fail-soft TCP reachability check against the upstream relay at startup. Catches DNS/routing/port/firewall misconfiguration at deploy time; a failure logs a warning and the relay still starts (mail queues). Does not verify SASL credentials or the TLS chain. `true` or `false`.                                                         | `true`             | No       |
-| `STARTUP_PROBE_TIMEOUT`   | Timeout in seconds for the startup reachability probe (1-10; kept under the 15s healthcheck start-period so a slow probe never delays readiness).                                                                                                                                                                                                 | `5`                | No       |
+| Variable                          | Description                                                                                                                                                                                                                                                                                                                                                                                         | Default                                   | Required |
+|-----------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------|----------|
+| `TZ`                              | Not configurable. The image omits `tzdata`, so all logs (Postfix maillog + the entrypoint's structured logs) are emitted in UTC — a single UTC timeline for Loki/Grafana ingestion. Setting `TZ` has no effect.                                                                                                                                                                                     | `UTC`                                     | No       |
+| `RELAY_HOST`                      | Upstream SMTP relay hostname; works with any provider (e.g. email-smtp.us-east-1.amazonaws.com for AWS SES, smtp.gmail.com for Gmail, smtp.mailgun.org for Mailgun)                                                                                                                                                                                                                                 | _none_                                    | Yes      |
+| `RELAY_LOGIN`                     | SASL username for the upstream relay. Optional, but must be set together with RELAY_PASSWORD (set neither to relay without SASL, e.g. to an IP-authenticated smarthost). Most hosted providers (SES, Gmail, Mailgun) require both.                                                                                                                                                                  | -                                         | No       |
+| `RELAY_PASSWORD`                  | SASL password for the upstream relay. Optional; see RELAY_LOGIN (both-or-neither).                                                                                                                                                                                                                                                                                                                  | -                                         | No       |
+| `RELAY_PORT`                      | Upstream relay port (587 for STARTTLS, 465 for implicit TLS). 465 requires a mandatory `SMTP_TLS_SECURITY_LEVEL` (`encrypt` or stronger, including `dane-only` and `fingerprint`; `none`, `may`, and `dane` — opportunistic without TLSA records — are rejected).                                                                                                                                   | `587`                                     | No       |
+| `SMTP_TLS_SECURITY_LEVEL`         | Outbound TLS level: `secure` (default; chain + hostname verification), `verify`, `encrypt`, `dane`/`dane-only`/`fingerprint` (see [TLS security levels](#tls-security-levels)), `may`, or `none`. See the [Postfix TLS README](https://www.postfix.org/TLS_README.html). Prefer `secure`/`verify` when SASL (`RELAY_LOGIN`/`RELAY_PASSWORD`) is set; `encrypt` and weaker lack peer authentication. | `secure`                                  | No       |
+| `SMTP_TLS_FINGERPRINT_CERT_MATCH` | One or more space-separated certificate or public-key digests of the upstream, each formatted as colon-separated hex pairs (see [TLS security levels](#tls-security-levels)). Both-or-neither with `SMTP_TLS_SECURITY_LEVEL=fingerprint`: required at that level, rejected at any other (a silently ignored trust anchor is a misconfiguration).                                                    | _none_                                    | No       |
+| `SMTP_TLS_FINGERPRINT_DIGEST`     | Digest algorithm for fingerprint matching: `sha256` or `sha512` only (md5/sha1 are rejected as collision-weak). Only meaningful with `SMTP_TLS_SECURITY_LEVEL=fingerprint`; explicitly setting it at any other level is rejected (both-or-neither, like the cert match).                                                                                                                            | `sha256`                                  | No       |
+| `MESSAGE_SIZE_LIMIT`              | Maximum message size in bytes (default 10240000 = 10 MB, AWS SES supports up to 40 MB with limit increase)                                                                                                                                                                                                                                                                                          | `10240000`                                | No       |
+| `ACCEPTED_NETWORKS`               | Space-separated CIDRs allowed to send mail through this relay. If unset, the entrypoint defaults to all RFC 1918 ranges (`192.168.0.0/16 172.16.0.0/12 10.0.0.0/8`); the shipped compose example deliberately narrows this to `192.168.0.0/16`.                                                                                                                                                     | `192.168.0.0/16 172.16.0.0/12 10.0.0.0/8` | No       |
+| `RECIPIENT_RESTRICTIONS`          | Optional recipient filter; space-separated list of allowed email addresses, domains, or regex patterns. If set, only matching recipients are accepted; all others are rejected. Leave empty to allow all recipients.                                                                                                                                                                                | ``                                        | No       |
+| `SMTP_HOSTNAME`                   | Postfix `myhostname` / HELO identity. Use an FQDN — some receiving MTAs reject non-FQDN HELO names. Validation rejects whitespace and shell metacharacters; it does not enforce FQDN shape.                                                                                                                                                                                                         | `smtp-relay.local`                        | No       |
+| `STARTUP_PROBE`                   | Run a fail-soft TCP reachability check against the upstream relay at startup. Catches DNS/routing/port/firewall misconfiguration at deploy time; a failure logs a warning and the relay still starts (mail queues). Does not verify SASL credentials or the TLS chain. `true` or `false`.                                                                                                           | `true`                                    | No       |
+| `STARTUP_PROBE_TIMEOUT`           | Timeout in seconds for the startup reachability probe (1-10; kept under the 15s healthcheck start-period so a slow probe never delays readiness).                                                                                                                                                                                                                                                   | `5`                                       | No       |
+
+### TLS security levels
+
+`secure` (the default) verifies the upstream's certificate chain and hostname
+and suits every hosted provider (SES, Gmail, Mailgun). Three specialist levels
+are fully supported for upstreams that warrant them:
+
+- **`dane`** — opportunistic DANE per
+  [RFC 7672](https://www.rfc-editor.org/rfc/rfc7672): TLS policy comes from
+  DNSSEC-validated TLSA records, and the render adds
+  `smtp_dns_support_level = dnssec` automatically. **Resolver requirement:**
+  DANE only works when the container's entire resolver chain is
+  DNSSEC-validating and trusted. Docker's embedded DNS forwards to the host's
+  resolvers, so the host must point at a validating resolver you trust (for
+  example a local `unbound`); with a non-validating resolver, TLSA records are
+  never seen as secure. Fallback is Postfix-native, by design: when a
+  destination has no usable (DNSSEC-validated) TLSA records, Postfix degrades
+  `dane` to the documented weaker semantics per RFC 7672 — nothing
+  defers just because TLSA is absent. Rejected on port 465
+  (opportunistic-family; implicit TLS needs a mandatory level).
+- **`dane-only`** — mandatory DANE: same mechanics, but no fallback by
+  design — delivery defers until DNSSEC-validated TLSA records verify. Use
+  only when the upstream publishes TLSA records and you want a hard fail
+  otherwise. Allowed on port 465 (mandatory level).
+- **`fingerprint`** — trust is pinned to specific certificate or public-key
+  digests instead of a CA chain. Set `SMTP_TLS_FINGERPRINT_CERT_MATCH` to one
+  or more space-separated digests of the upstream's certificate (or public
+  key), each formatted as colon-separated hex pairs — the format printed by
+  `openssl x509 -noout -fingerprint -sha256`. The digest algorithm is
+  `SMTP_TLS_FINGERPRINT_DIGEST` (`sha256` default, `sha512` supported;
+  md5/sha1 rejected as collision-weak). Both values are rendered into
+  `main.cf` — the digest explicitly, even at its default — so the effective
+  trust anchors stay auditable. Remember to update the pins when the upstream
+  rotates its certificate. Allowed on port 465 (mandatory level).
 
 ### Volumes
 
@@ -167,11 +203,11 @@ tools.
 | [gitleaks](https://github.com/gitleaks/gitleaks) | No secrets detected                                                             |
 | [trivy](https://trivy.dev/)                      | Clean                                                                           |
 | [grype](https://github.com/anchore/grype)        | Clean                                                                           |
-| [semgrep](https://semgrep.dev/)                  | 5 findings (ifs-tampering — deliberate IFS save/restore idiom, false positives) |
+| [semgrep](https://semgrep.dev/)                  | 7 findings (ifs-tampering — deliberate IFS save/restore idiom, false positives) |
 
 The entrypoint validates all env vars before generating Postfix
 config: newline injection, numeric range, shell metacharacters,
-open-relay CIDR rejection (`0.0.0.0/0` blocked, prefixes ≥/8 required),
+open-relay CIDR rejection (`0.0.0.0/0` and `::/0` blocked, prefixes ≥/8 required),
 TLS level allowlisting, and SASL credential field-format checks.
 Outbound TLS pins `>=TLSv1.2` and `high` cipher grade; default
 security level is `secure` (chain + hostname verification).
@@ -184,9 +220,18 @@ escalation. Postfix drops privileges internally.
 **Details for advanced users:** Recipient filtering uses properly
 escaped regex patterns.
 
+**Network exposure:** the example compose maps `25:25`, which binds
+the SMTP listener on all host interfaces. `ACCEPTED_NETWORKS` is
+relay authorization — it decides who may send mail through the relay,
+not who can reach the listener — so it does not stop Internet
+scanners from connecting to and exercising Postfix's SMTP parser. On
+a host with a WAN-facing interface, bind a specific LAN address
+instead (for example `ports: ["192.168.1.10:25:25"]`) and/or firewall
+TCP/25 to trusted source subnets.
+
 ## Dependencies
 
-All dependencies are updated automatically via [Renovate](https://github.com/renovatebot/renovate). The base image is pinned by SHA digest, and Postfix is pinned by version + SHA-256 and built from the upstream source tarball with feature parity to the Alpine `postfix` package (TLS, Cyrus SASL client auth, PCRE2, LMDB as the default map type, SMTPUTF8). The SASL runtime packages and shared libraries are installed unpinned so they track the digest-pinned base userland.
+All dependencies are updated automatically via [Renovate](https://github.com/renovatebot/renovate). The base image is pinned by SHA digest, and Postfix is pinned by version + SHA-256, its detached release signature verified at build with `gpgv` against the upstream signing key committed in this repo, and built from the upstream source tarball with feature parity to the Alpine `postfix` package (TLS, Cyrus SASL client auth, PCRE2, LMDB as the default map type, SMTPUTF8). The image embeds a CycloneDX component for the source-built Postfix so release SBOMs carry its name and version. The SASL runtime packages and shared libraries are installed unpinned so they track the digest-pinned base userland.
 
 | Dependency                    | Source                                                          |
 | ----------------------------- | --------------------------------------------------------------- |
