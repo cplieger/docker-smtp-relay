@@ -192,12 +192,17 @@ RUN { wget --tries=3 --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz" \
     # Embed a minimal CycloneDX component document naming the source-built
     # Postfix. It ships as loose staged files (no apk package), so Syft's
     # default image catalogers record the files but no package identity; the
-    # sbom-cataloger (enabled via the repo-root .syft.yaml) imports this
-    # document, so the signed release SBOM carries name/version/purl and
-    # future Postfix advisories can be matched against shipped images.
+    # sbom-cataloger (enabled centrally by the release pipeline via the
+    # SYFT_SELECT_CATALOGERS env in cplieger/ci docker-release.yaml; no
+    # per-repo .syft.yaml - the env var overrides the config-file key)
+    # imports this document, so the signed release SBOM carries
+    # name/version/purl/cpe and future Postfix advisories can be matched
+    # against shipped images. CPE vendor:product is postfix:postfix per the
+    # NVD CPE dictionary, e.g.
+    # https://nvd.nist.gov/products/cpe/detail/6320E431-6032-481D-87A0-30EECE8EDFD6/
     && mkdir -p /out/usr/share/sbom \
-    && printf '{"bomFormat":"CycloneDX","specVersion":"1.5","version":1,"components":[{"type":"application","name":"postfix","version":"%s","purl":"pkg:generic/postfix@%s"}]}\n' \
-        "${POSTFIX_VERSION#v}" "${POSTFIX_VERSION#v}" \
+    && printf '{"bomFormat":"CycloneDX","specVersion":"1.5","version":1,"components":[{"type":"application","name":"postfix","version":"%s","purl":"pkg:generic/postfix@%s","cpe":"cpe:2.3:a:postfix:postfix:%s:*:*:*:*:*:*:*"}]}\n' \
+        "${POSTFIX_VERSION#v}" "${POSTFIX_VERSION#v}" "${POSTFIX_VERSION#v}" \
         >/out/usr/share/sbom/postfix.cdx.json
 
 # ---------------------------------------------------------------------------
@@ -254,7 +259,9 @@ RUN ln -f /usr/sbin/sendmail /usr/bin/newaliases \
 # ---------------------------------------------------------------------------
 # Test stage - runs the golden-file config-generation tests at build time
 # (`entrypoint.sh render` needs only busybox tools), then asserts the
-# source-built Postfix: exact pinned version; TLS, Cyrus SASL client, and
+# source-built Postfix: exact pinned version; embedded SBOM fragment
+# shipped, JSON-shaped, naming postfix at the same ARG-pinned version;
+# TLS, Cyrus SASL client, and
 # EAI/SMTPUTF8 compiled in; every map type the generated config relies on
 # (hash:/btree: on lmdb, regexp:, plus cidr and pcre) present; setgid
 # postdrop plumbing intact after COPY; toolchain hardening (PIE, non-exec
@@ -274,6 +281,29 @@ RUN ENTRYPOINT_DIR=/usr/local/bin sh /tmp/tests/render-test.sh \
       || { printf 'FAIL: mail_version %s does not match pinned %s\n' \
              "$(postconf -h mail_version)" "${POSTFIX_VERSION#v}" >&2; exit 1; }; } \
     && postconf -T compile-version >/dev/null \
+    # Embedded SBOM fragment (builder stage): must ship, be JSON-shaped,
+    # name postfix, and carry exactly one version-shaped component version
+    # equal to the ARG-pinned release - a hardcoded version would drift
+    # silently on the next Renovate bump, which is exactly the failure mode
+    # the fragment exists to prevent. BusyBox has no jq, so shape is
+    # asserted with head/tail bytes and grep; the fragment is single-line
+    # compact JSON, so the version count uses grep -o (line-counting grep -c
+    # could never see a duplicate on one line). || true keeps the pipefail
+    # shell from aborting the count assignment before the FAIL report.
+    && sbom=/usr/share/sbom/postfix.cdx.json \
+    && { test -s "$sbom" \
+      || { printf 'FAIL: embedded SBOM fragment missing or empty: %s\n' "$sbom" >&2; exit 1; }; } \
+    && { test "$(head -c 1 "$sbom")" = '{' \
+      || { printf '%s\n' 'FAIL: embedded SBOM fragment does not start with { (not a JSON object)' >&2; exit 1; }; } \
+    && { test "$(tail -c 2 "$sbom")" = '}' \
+      || { printf '%s\n' 'FAIL: embedded SBOM fragment does not end with } (not a JSON object)' >&2; exit 1; }; } \
+    && { grep -q '"name":"postfix"' "$sbom" \
+      || { printf '%s\n' 'FAIL: embedded SBOM fragment missing component: postfix' >&2; exit 1; }; } \
+    && versions=$(grep -o '"version":"[0-9][0-9.]*"' "$sbom" | wc -l || true) \
+    && { test "$versions" -eq 1 \
+      || { printf 'FAIL: embedded SBOM fragment has %s version-shaped component versions (want 1)\n' "$versions" >&2; exit 1; }; } \
+    && { grep -qF "\"version\":\"${POSTFIX_VERSION#v}\"" "$sbom" \
+      || { printf 'FAIL: embedded SBOM fragment version is not %s (ARG wiring broken?)\n' "${POSTFIX_VERSION#v}" >&2; exit 1; }; } \
     && ldd /usr/libexec/postfix/smtpd >/tmp/smtpd-libs \
     && { grep -q libicuuc /tmp/smtpd-libs \
       || { printf '%s\n' 'FAIL: smtpd is not linked against libicuuc (EAI/SMTPUTF8 missing)' >&2; exit 1; }; } \
