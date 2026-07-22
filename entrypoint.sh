@@ -221,14 +221,10 @@ validate_relay_acceptance() {
   # Reject cleartext TLS when SASL credentials are configured — sending
   # passwords over an unencrypted channel is a credential leak. (Kept here,
   # after the ACCEPTED_NETWORKS checks, so exit-2 precedence is unchanged.)
-  if sasl_enabled; then
-    case "$SMTP_TLS_SECURITY_LEVEL" in
-      none | may)
-        printf 'level=error msg="TLS must be encrypt or stronger when SASL credentials are set" tls_level=%s\n' \
-          "$SMTP_TLS_SECURITY_LEVEL" >&2
-        exit 2
-        ;;
-    esac
+  if sasl_enabled && tls_level_cleartext; then
+    printf 'level=error msg="TLS must be encrypt or stronger when SASL credentials are set" tls_level=%s\n' \
+      "$SMTP_TLS_SECURITY_LEVEL" >&2
+    exit 2
   fi
 
   # RELAY_PORT=465 is the documented implicit-TLS port (the render turns on
@@ -238,14 +234,10 @@ validate_relay_acceptance() {
   # and such a config could never have delivered mail. Reject it instead of
   # rendering a dead relay. (Numeric -eq: RELAY_PORT is already validated
   # numeric and in range, and -eq also matches a leading-zero spelling.)
-  if [ "$RELAY_PORT" -eq 465 ]; then
-    case "$SMTP_TLS_SECURITY_LEVEL" in
-      none | may)
-        printf 'level=error msg="RELAY_PORT=465 is implicit TLS; SMTP_TLS_SECURITY_LEVEL must be encrypt or stronger" tls_level=%s\n' \
-          "$SMTP_TLS_SECURITY_LEVEL" >&2
-        exit 2
-        ;;
-    esac
+  if [ "$RELAY_PORT" -eq 465 ] && tls_level_cleartext; then
+    printf 'level=error msg="RELAY_PORT=465 is implicit TLS; SMTP_TLS_SECURITY_LEVEL must be encrypt or stronger" tls_level=%s\n' \
+      "$SMTP_TLS_SECURITY_LEVEL" >&2
+    exit 2
   fi
 }
 
@@ -339,6 +331,19 @@ compute_mynetworks() {
 # ---------------------------------------------------------------------------
 sasl_enabled() {
   [ -n "$RELAY_LOGIN" ] && [ -n "$RELAY_PASSWORD" ]
+}
+
+# ---------------------------------------------------------------------------
+# tls_level_cleartext -- true when the configured TLS level allows a cleartext
+# (none) or opportunistic (may) upstream channel. Single source of truth for
+# the two validate_relay_acceptance guards that must reject such a level
+# (credential leak with SASL; dead relay with implicit-TLS port 465).
+# ---------------------------------------------------------------------------
+tls_level_cleartext() {
+  case "$SMTP_TLS_SECURITY_LEVEL" in
+    none | may) return 0 ;;
+  esac
+  return 1
 }
 
 # ---------------------------------------------------------------------------
