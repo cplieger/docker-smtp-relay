@@ -39,7 +39,7 @@ readonly MAIN_CF="${CONF_DIR}/main.cf"
 # -------                  ----      -------              -----------
 # ACCEPTED_NETWORKS        string    192.168.0.0/16 ...   space-separated CIDRs; min /8; no 0.0.0.0/0 or ::/0
 # CONF_DIR                 string    /etc/postfix         no newlines/metacharacters (rendered into main.cf paths)
-# RELAY_HOST               string    (required)           no newlines/metacharacters; non-empty
+# RELAY_HOST               string    (required)           no newlines/metacharacters; non-empty; well-formed [brackets] (host:port warned)
 # RELAY_PORT               integer   587                  1-65535
 # RELAY_LOGIN              string    ""                   no whitespace or colons
 # RELAY_PASSWORD           string    ""                   no whitespace

@@ -199,6 +199,12 @@ check_fail relay-host-bracket-port 2 \
 check_fail relay-host-unbalanced-bracket 2 \
   "RELAY_HOST=[2001:db8::1"
 
+check_fail relay-host-empty-brackets 2 \
+  "RELAY_HOST=[]"
+
+check_fail relay-host-inner-bracket 2 \
+  "RELAY_HOST=[2001:db8::1]:587]"
+
 # --- sanitize_token regression ---------------------------------------------
 # The golden harness only diffs rendered files and asserts exit codes; there
 # is no stderr-log assertion mechanism, so exercise the log-only sanitizer

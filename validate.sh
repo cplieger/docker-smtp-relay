@@ -130,28 +130,36 @@ validate_relay_host_shape() {
         "$(sanitize_token "$1")" >&2
       return 1
       ;;
+    *\[* | *\]*)
+      # A bracket anywhere in a non-bracket-leading value renders a malformed
+      # relayhost ([host]]:587): no legitimate hostname or IPv6 address
+      # contains a stray bracket. Warn-only pending the escalation decision.
+      printf 'level=warn msg="RELAY_HOST contains a stray bracket; the rendered relayhost will be malformed and Postfix will defer all mail" relay_host="%s"\n' \
+        "$(sanitize_token "$1")" >&2
+      ;;
   esac
   case "$1" in
     *:*)
+      # Classify the colon-bearing value, then warn once (a single copy of
+      # the message keeps the logfmt contract in one place). Exactly one
+      # colon can never be IPv6 (even ::1 has two), so it is host:port
+      # regardless of character set (192.0.2.10:587, deadbeef:587 -- both
+      # all-hex, both silent under the old check). Two or more colons:
+      # plausibly IPv6; warn only on characters invalid in an IPv6 address
+      # (also catches %zone ids).
+      _rh_hostport=1
       case "${1#*:}" in
         *:*)
-          # Two or more colons: plausibly IPv6; warn only on characters
-          # invalid in an IPv6 address (also catches %zone ids).
           case "$1" in
-            *[!0-9a-fA-F:.]*)
-              printf 'level=warn msg="RELAY_HOST contains a colon but is not an IPv6 address (host:port?); the rendered relayhost will never resolve (put the port in RELAY_PORT)" relay_host="%s"\n' \
-                "$(sanitize_token "$1")" >&2
-              ;;
+            *[!0-9a-fA-F:.]*) ;;
+            *) _rh_hostport=0 ;;
           esac
           ;;
-        *)
-          # Exactly one colon can never be IPv6 (even ::1 has two), so this
-          # is host:port regardless of character set (192.0.2.10:587,
-          # deadbeef:587 -- both all-hex, both silent under the old check).
-          printf 'level=warn msg="RELAY_HOST contains a colon but is not an IPv6 address (host:port?); the rendered relayhost will never resolve (put the port in RELAY_PORT)" relay_host="%s"\n' \
-            "$(sanitize_token "$1")" >&2
-          ;;
       esac
+      if [ "$_rh_hostport" -eq 1 ]; then
+        printf 'level=warn msg="RELAY_HOST contains a colon but is not an IPv6 address (host:port?); the rendered relayhost will never resolve (put the port in RELAY_PORT)" relay_host="%s"\n' \
+          "$(sanitize_token "$1")" >&2
+      fi
       ;;
   esac
   return 0
