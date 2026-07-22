@@ -44,7 +44,7 @@ readonly MAIN_CF="${CONF_DIR}/main.cf"
 # RELAY_LOGIN              string    ""                   no whitespace or colons
 # RELAY_PASSWORD           string    ""                   no whitespace
 # RECIPIENT_RESTRICTIONS   string    ""                   space-separated; addresses, domains, or /regex/
-# SMTP_TLS_SECURITY_LEVEL  enum      secure               one of $TLS_LEVELS (see validate.sh); not none/may with RELAY_PORT=465
+# SMTP_TLS_SECURITY_LEVEL  enum      secure               one of $TLS_LEVELS (see validate.sh); not none/may/dane with RELAY_PORT=465
 # MESSAGE_SIZE_LIMIT       integer   10240000             max 104857600 (100 MB)
 # SMTP_HOSTNAME            string    smtp-relay.local     FQDN recommended (shape not enforced); no newlines/metacharacters
 # STARTUP_PROBE            enum      true                 true|false; fail-soft upstream TCP check
@@ -229,13 +229,17 @@ validate_relay_acceptance() {
 
   # RELAY_PORT=465 is the documented implicit-TLS port (the render turns on
   # smtp_tls_wrappermode, see compute_tls_wrappermode): the upstream opens
-  # with a TLS handshake, so a disabled (none) or opportunistic (may) TLS
-  # level contradicts the contract — the wrapped connection is mandatory TLS
-  # and such a config could never have delivered mail. Reject it instead of
-  # rendering a dead relay. (Numeric -eq: RELAY_PORT is already validated
-  # numeric and in range, and -eq also matches a leading-zero spelling.)
-  if [ "$RELAY_PORT" -eq 465 ] && tls_level_cleartext; then
-    printf 'level=error msg="RELAY_PORT=465 is implicit TLS; SMTP_TLS_SECURITY_LEVEL must be encrypt or stronger" tls_level=%s\n' \
+  # with a TLS handshake, so the level must be mandatory — Postfix documents
+  # smtp_tls_wrappermode as requiring smtp_tls_security_level = encrypt or
+  # stronger (postconf(5); the 3.10.6 release notes state TLS can be optional
+  # only for STARTTLS connections). none/may allow cleartext, and dane is
+  # opportunistic-family (degrades to may without usable TLSA records), so
+  # all three contradict the contract — such a config could never have
+  # delivered mail. Reject it instead of rendering a dead relay. (Numeric
+  # -eq: RELAY_PORT is already validated numeric and in range, and -eq also
+  # matches a leading-zero spelling.)
+  if [ "$RELAY_PORT" -eq 465 ] && tls_level_wrapper_incompatible; then
+    printf 'level=error msg="RELAY_PORT=465 is implicit TLS; SMTP_TLS_SECURITY_LEVEL must be mandatory (encrypt or stronger; dane is opportunistic and degrades to may without TLSA records)" tls_level=%s\n' \
       "$SMTP_TLS_SECURITY_LEVEL" >&2
     exit 2
   fi
@@ -336,12 +340,31 @@ sasl_enabled() {
 # ---------------------------------------------------------------------------
 # tls_level_cleartext -- true when the configured TLS level allows a cleartext
 # (none) or opportunistic (may) upstream channel. Single source of truth for
-# the two validate_relay_acceptance guards that must reject such a level
-# (credential leak with SASL; dead relay with implicit-TLS port 465).
+# the SASL guard in validate_relay_acceptance (credentials must never travel
+# a possibly-cleartext channel); the implicit-TLS port 465 gate uses the
+# stricter sibling below.
 # ---------------------------------------------------------------------------
 tls_level_cleartext() {
   case "$SMTP_TLS_SECURITY_LEVEL" in
     none | may) return 0 ;;
+  esac
+  return 1
+}
+
+# ---------------------------------------------------------------------------
+# tls_level_wrapper_incompatible -- true when the configured TLS level cannot
+# satisfy implicit TLS on RELAY_PORT=465. Postfix documents
+# smtp_tls_wrappermode as requiring smtp_tls_security_level = encrypt or
+# stronger (postconf(5); the 3.10.6 release notes state TLS can be optional
+# only for STARTTLS connections — wrappermode downgrades a weaker floor to
+# encrypt). none and may allow a cleartext channel outright, and dane is
+# opportunistic-family: without usable TLSA records (the normal case for
+# hosted providers like SES/Gmail/Mailgun) it degrades to may. Sibling of
+# tls_level_cleartext, which stays the SASL credential-leak predicate.
+# ---------------------------------------------------------------------------
+tls_level_wrapper_incompatible() {
+  case "$SMTP_TLS_SECURITY_LEVEL" in
+    none | may | dane) return 0 ;;
   esac
   return 1
 }

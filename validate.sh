@@ -30,6 +30,25 @@ validate_no_newlines() {
 # Where the token itself must stay diagnosable (per-entry network validators:
 # a multi-entry list needs to identify WHICH entry failed), route it through
 # sanitize_token and emit it as a quoted logfmt field.
+#
+# Validation policy -- which inputs are fatal, and which are the operator's:
+#   Tier 1 (always fatal, security): injection into rendered config (the
+#     newline/metacharacter checks), open-relay CIDR rejection, credential
+#     exposure (SASL field format; cleartext TLS with SASL), and any input
+#     that silently turns a configured restriction into allow-all (the
+#     empty / slash-leading recipient regex class).
+#   Tier 2 (fatal, documented contract): value combinations the app's own
+#     documented contract says can never function -- the implicit-TLS 465
+#     mandatory-level gate, and the landed never-matching-shape escalations
+#     (whitespace-only / leading-zero / multi-slash network entries,
+#     leading-bracket RELAY_HOST defects). This set is CLOSED: each entry
+#     was an explicit user decision; new entries require the same.
+#   Tier 3 (operator's responsibility): syntactically-plausible but
+#     semantically-wrong values beyond those tiers (typo'd hostnames,
+#     host:port confusion, exotic never-matching shapes). The validator does
+#     NOT chase these per-shape: the existing warn arms are grandfathered-
+#     final, no new shape arms get added without a Tier 1/2 justification,
+#     and Postfix's own runtime diagnostics are the source of truth for them.
 
 # sanitize_token -- strip logfmt delimiters (backslash, double quote) and
 # control bytes (CR, VT, FF, ...), and bound the value to 512 bytes, so a
@@ -170,7 +189,8 @@ validate_relay_host_shape() {
     *\[* | *\]*)
       # A bracket anywhere in a non-bracket-leading value renders a malformed
       # relayhost ([host]]:587): no legitimate hostname or IPv6 address
-      # contains a stray bracket. Warn-only pending the escalation decision.
+      # contains a stray bracket. Deliberately warn-only: Tier 3 of the
+      # validation policy in the header (grandfathered-final warn arm).
       printf 'level=warn msg="RELAY_HOST contains a stray bracket; the rendered relayhost will be malformed and Postfix will defer all mail" relay_host="%s"\n' \
         "$(sanitize_token "$1")" >&2
       ;;

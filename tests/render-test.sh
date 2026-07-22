@@ -205,6 +205,14 @@ check_fail implicit-tls-may 2 \
   RELAY_PORT=465 \
   SMTP_TLS_SECURITY_LEVEL=may
 
+# dane is opportunistic-family: without usable TLSA records it degrades to
+# may, which wrappermode cannot satisfy (Postfix requires encrypt or
+# stronger for implicit TLS).
+check_fail implicit-tls-dane 2 \
+  RELAY_HOST=smtp.example.com \
+  RELAY_PORT=465 \
+  SMTP_TLS_SECURITY_LEVEL=dane
+
 check_fail relay-host-bracket-port 2 \
   "RELAY_HOST=[2001:db8::1]:587"
 
