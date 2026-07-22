@@ -160,6 +160,22 @@ check_ok fingerprint-relay \
   SMTP_TLS_SECURITY_LEVEL=fingerprint \
   "SMTP_TLS_FINGERPRINT_CERT_MATCH=00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99"
 
+# Inbound STARTTLS is opt-in: a mounted cert/key pair renders the smtpd_tls_*
+# block with the level defaulting to may (opportunistic). The paths are
+# illustrative — render mode deliberately does not require the files to
+# exist (that filesystem contract is run-mode-only).
+check_ok smtpd-tls \
+  RELAY_HOST=smtp.example.com \
+  SMTPD_TLS_CERT_FILE=/certs/smtpd.pem \
+  SMTPD_TLS_KEY_FILE=/certs/smtpd.key
+
+# encrypt requires TLS from every inbound sender.
+check_ok smtpd-tls-encrypt \
+  RELAY_HOST=smtp.example.com \
+  SMTPD_TLS_CERT_FILE=/certs/smtpd.pem \
+  SMTPD_TLS_KEY_FILE=/certs/smtpd.key \
+  SMTPD_TLS_SECURITY_LEVEL=encrypt
+
 # --- Rejected configurations (exit 2) -------------------------------------
 check_fail no-relay-host 2 \
   RELAY_HOST=
@@ -285,6 +301,27 @@ check_fail fingerprint-md5-digest 2 \
   SMTP_TLS_SECURITY_LEVEL=fingerprint \
   SMTP_TLS_FINGERPRINT_CERT_MATCH=00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd:ee:ff \
   SMTP_TLS_FINGERPRINT_DIGEST=md5
+
+# The inbound cert/key pair is both-or-neither (mirrors the RELAY_LOGIN/
+# RELAY_PASSWORD contract): half a pair can never negotiate STARTTLS.
+check_fail smtpd-tls-key-only 2 \
+  RELAY_HOST=smtp.example.com \
+  SMTPD_TLS_KEY_FILE=/certs/smtpd.key
+
+# An inbound level without the cert pair renders no smtpd_tls_* lines at
+# all — a trust config that silently does nothing is a misconfiguration
+# (same posture as SMTP_TLS_FINGERPRINT_DIGEST at a non-fingerprint level).
+check_fail smtpd-tls-level-without-certs 2 \
+  RELAY_HOST=smtp.example.com \
+  SMTPD_TLS_SECURITY_LEVEL=may
+
+# The inbound level is allowlisted to may/encrypt; cleartext is expressed
+# by leaving the pair unset, not by a level value.
+check_fail smtpd-tls-bad-level 2 \
+  RELAY_HOST=smtp.example.com \
+  SMTPD_TLS_CERT_FILE=/certs/smtpd.pem \
+  SMTPD_TLS_KEY_FILE=/certs/smtpd.key \
+  SMTPD_TLS_SECURITY_LEVEL=secure
 
 check_fail relay-host-bracket-port 2 \
   "RELAY_HOST=[2001:db8::1]:587"

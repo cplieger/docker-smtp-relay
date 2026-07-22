@@ -47,6 +47,9 @@ readonly MAIN_CF="${CONF_DIR}/main.cf"
 # SMTP_TLS_SECURITY_LEVEL          enum      secure               one of $TLS_LEVELS (see validate.sh); not none/may/dane with RELAY_PORT=465; fingerprint requires SMTP_TLS_FINGERPRINT_CERT_MATCH
 # SMTP_TLS_FINGERPRINT_CERT_MATCH  string    ""                   space-separated digests, each colon-separated hex pairs; both-or-neither with level=fingerprint
 # SMTP_TLS_FINGERPRINT_DIGEST      enum      sha256               sha256|sha512 only; explicitly setting it at a non-fingerprint level is fatal
+# SMTPD_TLS_CERT_FILE              string    ""                   inbound STARTTLS server cert (PEM, may include chain); both-or-neither with SMTPD_TLS_KEY_FILE; run mode requires a readable file
+# SMTPD_TLS_KEY_FILE               string    ""                   inbound STARTTLS private key (PEM); both-or-neither with SMTPD_TLS_CERT_FILE; group/world-readable key draws a warning
+# SMTPD_TLS_SECURITY_LEVEL         enum      ""                   may|encrypt only; requires the cert/key pair (empty = may when the pair is set); unset pair keeps port 25 cleartext
 # MESSAGE_SIZE_LIMIT               integer   10240000             max 104857600 (100 MB)
 # SMTP_HOSTNAME                    string    smtp-relay.local     FQDN recommended (shape not enforced); no newlines/metacharacters
 # STARTUP_PROBE                    enum      true                 true|false; fail-soft upstream TCP check
@@ -92,6 +95,14 @@ apply_defaults() {
     FINGERPRINT_DIGEST_EXPLICIT=false
     SMTP_TLS_FINGERPRINT_DIGEST=sha256
   fi
+  # Inbound STARTTLS is opt-in: all three default empty, so port 25 keeps
+  # speaking cleartext SMTP unless the operator mounts a cert/key pair. The
+  # level's effective default (may, when the pair is set) is resolved in
+  # compute_smtpd_tls_lines, not here: an empty level with no pair must stay
+  # indistinguishable from unset (both mean "inbound TLS off").
+  : "${SMTPD_TLS_CERT_FILE:=}"
+  : "${SMTPD_TLS_KEY_FILE:=}"
+  : "${SMTPD_TLS_SECURITY_LEVEL:=}"
   : "${MESSAGE_SIZE_LIMIT:=10240000}"
   # Use an FQDN-shaped default so Postfix does not emit `numeric hostname`
   # warnings and receiving MTAs that validate HELO accept the relay. Postfix's
@@ -151,6 +162,9 @@ RECIPIENT_RESTRICTIONS:nl
 SMTP_TLS_SECURITY_LEVEL:nl
 SMTP_TLS_FINGERPRINT_CERT_MATCH:nl
 SMTP_TLS_FINGERPRINT_DIGEST:nl
+SMTPD_TLS_CERT_FILE:nl,meta
+SMTPD_TLS_KEY_FILE:nl,meta
+SMTPD_TLS_SECURITY_LEVEL:nl
 MESSAGE_SIZE_LIMIT:nl,num,range=1:104857600
 SMTP_HOSTNAME:nl,meta
 STARTUP_PROBE:nl
@@ -255,6 +269,47 @@ validate_fingerprint_config() {
   fi
 }
 
+# validate_smtpd_tls_config — the inbound (smtpd) TLS vars are both-or-
+# neither, mirroring the RELAY_LOGIN/RELAY_PASSWORD contract (Tier 2,
+# explicit user decision):
+#   - half a cert/key pair can never negotiate STARTTLS (Postfix needs
+#     both), so it is rejected at boot instead of rendering a dead or
+#     surprising inbound surface.
+#   - SMTPD_TLS_SECURITY_LEVEL without the pair renders no smtpd_tls_*
+#     lines at all — a trust config that silently does nothing is a
+#     misconfiguration surprise, so it is equally fatal (same rationale as
+#     SMTP_TLS_FINGERPRINT_DIGEST at a non-fingerprint level).
+#   - the level is allowlisted to may|encrypt: `none` is expressed by
+#     leaving the pair unset, and the certless outbound-style levels
+#     (secure, verify, ...) are meaningless for a server-side listener.
+# The filesystem contract (the pair must exist as readable files) is
+# run-mode-only and lives in validate_runtime_config.
+validate_smtpd_tls_config() {
+  if [ -z "$SMTPD_TLS_CERT_FILE" ] && [ -z "$SMTPD_TLS_KEY_FILE" ]; then
+    if [ -n "$SMTPD_TLS_SECURITY_LEVEL" ]; then
+      # Do not interpolate the level: it is unvalidated at this point (the
+      # allowlist below only runs when the pair is set).
+      printf 'level=error msg="SMTPD_TLS_SECURITY_LEVEL is set but SMTPD_TLS_CERT_FILE/SMTPD_TLS_KEY_FILE are not; without the cert/key pair no inbound TLS is rendered, and a trust config that silently does nothing is a misconfiguration"\n' >&2
+      exit 2
+    fi
+    return 0
+  fi
+  if [ -z "$SMTPD_TLS_CERT_FILE" ] || [ -z "$SMTPD_TLS_KEY_FILE" ]; then
+    printf 'level=error msg="both SMTPD_TLS_CERT_FILE and SMTPD_TLS_KEY_FILE must be set for inbound TLS"\n' >&2
+    exit 2
+  fi
+  # The empty value takes the may default in compute_smtpd_tls_lines.
+  case "${SMTPD_TLS_SECURITY_LEVEL:-may}" in
+    may | encrypt) ;;
+    *)
+      # The rejected value is unvalidated input; do not interpolate it
+      # (logfmt quoting) — the allowlist is enough context to fix the config.
+      printf 'level=error msg="invalid inbound TLS security level (cleartext is expressed by leaving the cert/key pair unset, not by a level value)" var=SMTPD_TLS_SECURITY_LEVEL valid="may encrypt"\n' >&2
+      exit 2
+      ;;
+  esac
+}
+
 # validate_relay_acceptance — relay-acceptance policy: who we accept mail
 # from, and that credentials never travel a cleartext upstream channel.
 validate_relay_acceptance() {
@@ -327,12 +382,40 @@ validate_runtime_config() {
     printf 'level=error msg="CONF_DIR must be an existing writable directory" conf_dir="%s"\n' "$(sanitize_token "$CONF_DIR")" >&2
     exit 2
   fi
+
+  # Inbound TLS cert/key filesystem contract, run mode only: render mode
+  # must stay side-effect-free and runnable without the operator's mounted
+  # files (the golden tests exercise paths that exist only in the deployed
+  # container), so the existence check applies where Postfix will actually
+  # read the files. Same structured-error rationale as CONF_DIR above: a
+  # missing mount would otherwise surface only as a maillog TLS-engine
+  # error after "input validation passed" was logged.
+  if [ "$MODE" = run ] && [ -n "$SMTPD_TLS_CERT_FILE" ]; then
+    for _tls_file in "$SMTPD_TLS_CERT_FILE" "$SMTPD_TLS_KEY_FILE"; do
+      if [ ! -f "$_tls_file" ] || [ ! -r "$_tls_file" ]; then
+        printf 'level=error msg="inbound TLS cert/key must be an existing readable file (is the volume mounted?)" path="%s"\n' "$(sanitize_token "$_tls_file")" >&2
+        exit 2
+      fi
+    done
+    # The key is a private credential: flag a group- or world-readable mode
+    # (read bit in either of the last two octal digits), but keep it a
+    # warning — the operator may have deliberate group-read semantics on
+    # the mount (e.g. a cert-renewal sidecar's shared group).
+    _key_mode=$(stat -c %a "$SMTPD_TLS_KEY_FILE" 2>/dev/null) || _key_mode=''
+    case "$_key_mode" in
+      *[4-7]? | *[4-7])
+        printf 'level=warn msg="inbound TLS key file is group- or world-readable" path="%s" mode=%s\n' \
+          "$(sanitize_token "$SMTPD_TLS_KEY_FILE")" "$_key_mode" >&2
+        ;;
+    esac
+  fi
 }
 
 validate_config() {
   validate_declared_fields
   validate_sasl_config
   validate_fingerprint_config
+  validate_smtpd_tls_config
   validate_relay_acceptance
   validate_runtime_config
 
@@ -398,6 +481,36 @@ smtp_tls_fingerprint_cert_match = ${SMTP_TLS_FINGERPRINT_CERT_MATCH}
 smtp_tls_fingerprint_digest = ${SMTP_TLS_FINGERPRINT_DIGEST}"
       ;;
   esac
+}
+
+# ---------------------------------------------------------------------------
+# compute_smtpd_tls_lines — inbound STARTTLS, opt-in: the smtpd_tls_* block
+# is rendered only when the operator mounts a cert/key pair (an empty value
+# renders nothing, so every certless render stays byte-identical and port 25
+# keeps speaking cleartext SMTP, the documented default). The level defaults
+# to may (opportunistic STARTTLS); encrypt requires TLS from every sender.
+# The protocol/cipher floor mirrors the outbound lines (>=TLSv1.2, high) so
+# both directions share one TLS posture. SMTPD_TLS_LEVEL_VALUE carries the
+# effective level (off when the pair is unset) for the startup log.
+# ---------------------------------------------------------------------------
+compute_smtpd_tls_lines() {
+  # validate_smtpd_tls_config has already enforced both-or-neither, so
+  # testing the cert alone is testing the pair.
+  if [ -n "$SMTPD_TLS_CERT_FILE" ]; then
+    SMTPD_TLS_LEVEL_VALUE="${SMTPD_TLS_SECURITY_LEVEL:-may}"
+    SMTPD_TLS_LINES="
+
+smtpd_tls_security_level = ${SMTPD_TLS_LEVEL_VALUE}
+smtpd_tls_cert_file = ${SMTPD_TLS_CERT_FILE}
+smtpd_tls_key_file = ${SMTPD_TLS_KEY_FILE}
+smtpd_tls_protocols = >=TLSv1.2
+smtpd_tls_mandatory_protocols = >=TLSv1.2
+smtpd_tls_ciphers = high
+smtpd_tls_mandatory_ciphers = high"
+  else
+    SMTPD_TLS_LEVEL_VALUE="off"
+    SMTPD_TLS_LINES=''
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -545,7 +658,7 @@ smtp_tls_session_cache_database = lmdb:\${data_directory}/smtp_scache
 smtp_tls_protocols = >=TLSv1.2
 smtp_tls_mandatory_protocols = >=TLSv1.2
 smtp_tls_mandatory_ciphers = high
-smtp_tls_ciphers = high
+smtp_tls_ciphers = high${SMTPD_TLS_LINES}
 
 message_size_limit = ${MESSAGE_SIZE_LIMIT}
 # Postfix requires mailbox_size_limit >= message_size_limit. With the Postfix
@@ -578,6 +691,9 @@ render_config() {
   compute_relayhost
   compute_tls_wrappermode
   compute_tls_policy_lines
+  # Inbound STARTTLS, opt-in: rendered only when the operator mounts a
+  # cert/key pair (see compute_smtpd_tls_lines).
+  compute_smtpd_tls_lines
   compute_mynetworks
   compute_sasl_state
   # Sets SMTPD_RECIPIENT_RESTRICTIONS and writes $CONF_DIR/recipient_access.
@@ -901,6 +1017,9 @@ count_queue() {
 # deferred mail). Raw find counts are more parseable than postqueue's summary
 # string for Grafana stats() queries. queue_scan_ok=false marks the counts as
 # non-authoritative when either scan failed (details in the paired warn).
+# tls is the outbound (upstream) level; smtpd_tls is the effective inbound
+# level (off unless a cert/key pair is mounted), so the two TLS directions
+# stay distinguishable in one line.
 # ---------------------------------------------------------------------------
 log_startup() {
   count_queue active /var/spool/postfix/active
@@ -909,8 +1028,8 @@ log_startup() {
   count_queue deferred /var/spool/postfix/deferred
   _queue_deferred=$_queue_count
   [ "$_queue_ok" = true ] || _queue_scan_ok=false
-  printf 'level=info msg="starting smtp-relay" relay="%s" tls=%s networks="%s" queue_active=%d queue_deferred=%d queue_scan_ok=%s\n' \
-    "$(sanitize_token "$RELAYHOST_VALUE")" "$SMTP_TLS_SECURITY_LEVEL" "$(sanitize_token "$ACCEPTED_NETWORKS")" \
+  printf 'level=info msg="starting smtp-relay" relay="%s" tls=%s smtpd_tls=%s networks="%s" queue_active=%d queue_deferred=%d queue_scan_ok=%s\n' \
+    "$(sanitize_token "$RELAYHOST_VALUE")" "$SMTP_TLS_SECURITY_LEVEL" "$SMTPD_TLS_LEVEL_VALUE" "$(sanitize_token "$ACCEPTED_NETWORKS")" \
     "$_queue_active" "$_queue_deferred" "$_queue_scan_ok" >&2
 }
 

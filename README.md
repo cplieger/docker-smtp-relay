@@ -72,6 +72,9 @@ services:
 | `SMTP_TLS_SECURITY_LEVEL`         | Outbound TLS level: `secure` (default; chain + hostname verification), `verify`, `encrypt`, `dane`/`dane-only`/`fingerprint` (see [TLS security levels](#tls-security-levels)), `may`, or `none`. See the [Postfix TLS README](https://www.postfix.org/TLS_README.html). Prefer `secure`/`verify` when SASL (`RELAY_LOGIN`/`RELAY_PASSWORD`) is set; `encrypt` and weaker lack peer authentication.                                                                                                                                                                                                                                | `secure`                                  | No       |
 | `SMTP_TLS_FINGERPRINT_CERT_MATCH` | One or more space-separated certificate or public-key digests of the upstream, each formatted as colon-separated hex pairs (see [TLS security levels](#tls-security-levels)). Both-or-neither with `SMTP_TLS_SECURITY_LEVEL=fingerprint`: required at that level, rejected at any other (a silently ignored trust anchor is a misconfiguration).                                                                                                                                                                                                                                                                                   | _none_                                    | No       |
 | `SMTP_TLS_FINGERPRINT_DIGEST`     | Digest algorithm for fingerprint matching: `sha256` or `sha512` only (md5/sha1 are rejected as collision-weak). Only meaningful with `SMTP_TLS_SECURITY_LEVEL=fingerprint`; explicitly setting it at any other level is rejected (both-or-neither, like the cert match).                                                                                                                                                                                                                                                                                                                                                           | `sha256`                                  | No       |
+| `SMTPD_TLS_CERT_FILE`             | Server certificate for inbound STARTTLS on port 25 (PEM; may include the chain). Both-or-neither with `SMTPD_TLS_KEY_FILE`: mount and set both to offer STARTTLS to sending clients (see [Inbound TLS (STARTTLS)](#inbound-tls-starttls)); without the pair, inbound stays cleartext.                                                                                                                                                                                                                                                                                                                                              | _none_                                    | No       |
+| `SMTPD_TLS_KEY_FILE`              | Private key for the inbound STARTTLS certificate (PEM). Both-or-neither with `SMTPD_TLS_CERT_FILE`. A group- or world-readable key file draws a startup warning.                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | _none_                                    | No       |
+| `SMTPD_TLS_SECURITY_LEVEL`        | Inbound TLS level: `may` (opportunistic — STARTTLS offered, cleartext still accepted) or `encrypt` (require TLS from every sender). Only meaningful with the cert/key pair set; setting it without the pair is rejected.                                                                                                                                                                                                                                                                                                                                                                                                           | `may` when certs set                      | No       |
 | `MESSAGE_SIZE_LIMIT`              | Maximum message size in bytes (default 10240000 = 10 MB, AWS SES supports up to 40 MB with limit increase)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | `10240000`                                | No       |
 | `ACCEPTED_NETWORKS`               | Space-separated CIDRs allowed to send mail through this relay. If unset, the entrypoint defaults to all RFC 1918 ranges (`192.168.0.0/16 172.16.0.0/12 10.0.0.0/8`); the shipped compose example deliberately narrows this to `192.168.0.0/16`.                                                                                                                                                                                                                                                                                                                                                                                    | `192.168.0.0/16 172.16.0.0/12 10.0.0.0/8` | No       |
 | `RECIPIENT_RESTRICTIONS`          | Optional recipient filter; space-separated list of allowed email addresses, domains, or regex patterns. Regex tokens use Postfix `/.../` delimiters (e.g. `/^alerts-.*@example\.com$/`); a literal `/` inside the pattern must be backslash-escaped, since Postfix ends the pattern at the first unescaped `/`. A malformed regex token is warned about and skipped (the valid remainder still applies); if every entry is malformed the container refuses to start (exit 2) rather than silently rejecting all mail. If set, only matching recipients are accepted; all others are rejected. Leave empty to allow all recipients. | ``                                        | No       |
@@ -113,6 +116,30 @@ are fully supported for upstreams that warrant them:
   `main.cf` — the digest explicitly, even at its default — so the effective
   trust anchors stay auditable. Remember to update the pins when the upstream
   rotates its certificate. Allowed on port 465 (mandatory level).
+
+### Inbound TLS (STARTTLS)
+
+The levels above govern the upstream (outbound) connection. Inbound port 25
+speaks cleartext SMTP by default — no STARTTLS is offered to sending clients.
+`ACCEPTED_NETWORKS` is relay authorization (who may send mail through the
+relay), not transport confidentiality: it does not encrypt anything. To offer
+STARTTLS on port 25, mount a certificate/key pair and point the two env vars
+at it:
+
+```yaml
+    environment:
+      SMTPD_TLS_CERT_FILE: "/certs/smtpd.pem"  # PEM; may include the chain
+      SMTPD_TLS_KEY_FILE: "/certs/smtpd.key"
+    volumes:
+      - "/path/to/certs:/certs:ro"
+```
+
+The default level, `may`, offers STARTTLS opportunistically and protects
+against passive capture only: an active on-path attacker can strip the
+STARTTLS offer, and clients that do not verify the certificate gain no
+authentication from it. `encrypt` requires every sender to negotiate TLS
+before mail is accepted — verify your senders actually support STARTTLS
+first, or their mail is refused at the door.
 
 ### Volumes
 
@@ -215,6 +242,9 @@ open-relay CIDR rejection (`0.0.0.0/0` and `::/0` blocked, prefixes ≥/8 requir
 TLS level allowlisting, and SASL credential field-format checks.
 Outbound TLS pins `>=TLSv1.2` and `high` cipher grade; default
 security level is `secure` (chain + hostname verification).
+Inbound TLS is opt-in via `SMTPD_TLS_CERT_FILE`/`SMTPD_TLS_KEY_FILE`
+(same protocol/cipher floor); without the pair, port 25 speaks
+cleartext.
 SASL credentials are written with umask 077 and the plaintext
 file is removed after `postmap` (trap-guarded against partial
 failure). Runs as root (required for port 25) with
