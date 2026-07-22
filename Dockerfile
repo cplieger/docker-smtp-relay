@@ -22,7 +22,7 @@ ARG POSTFIX_SHA256=4a6ab3d0e9390989fa201fc6c446045fc702c4e16e7a247c3ae261c9e9bee
 # (openssl), Cyrus SASL client auth, PCRE2, LMDB as the default database type
 # with Berkeley DB disabled (hash:/btree: maps transparently use LMDB - see
 # Postfix's NON_BERKELEYDB_README; the entrypoint's `hash:` sasl_passwd map
-# and `btree:` TLS session cache both depend on this), NIS off, and
+# depends on this; its TLS session cache is an explicit lmdb: map), NIS off, and
 # EAI/SMTPUTF8 on (makedefs auto-detects icu-dev). The LDAP/MySQL/PgSQL/
 # SQLite backends that Alpine splits into subpackages (never installed by
 # this image) are skipped, and map types are compiled in statically

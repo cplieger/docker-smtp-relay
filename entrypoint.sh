@@ -301,7 +301,6 @@ validate_relay_acceptance() {
       "$SMTP_TLS_SECURITY_LEVEL" >&2
     exit 2
   fi
-
 }
 
 # validate_runtime_config — runtime toggles and the filesystem contract.
@@ -806,7 +805,10 @@ probe_relay_tcp() {
 }
 
 probe_upstream() {
-  [ "$STARTUP_PROBE" = "true" ] || return 0
+  if [ "$STARTUP_PROBE" != "true" ]; then
+    printf 'level=info msg="startup probe disabled" var=STARTUP_PROBE\n' >&2
+    return 0
+  fi
 
   # nc needs the bare host; strip the IPv6/skip-MX brackets the relay host
   # may carry.
