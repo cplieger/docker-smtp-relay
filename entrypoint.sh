@@ -228,21 +228,31 @@ validate_relay_acceptance() {
   fi
 
   # RELAY_PORT=465 is the documented implicit-TLS port (the render turns on
-  # smtp_tls_wrappermode, see compute_tls_wrappermode): the upstream opens
-  # with a TLS handshake, so the level must be mandatory — Postfix documents
-  # smtp_tls_wrappermode as requiring smtp_tls_security_level = encrypt or
-  # stronger (postconf(5); the 3.10.6 release notes state TLS can be optional
-  # only for STARTTLS connections). none/may allow cleartext, and dane is
-  # opportunistic-family (degrades to may without usable TLSA records), so
-  # all three contradict the contract — such a config could never have
-  # delivered mail. Reject it instead of rendering a dead relay. (Numeric
-  # -eq: RELAY_PORT is already validated numeric and in range, and -eq also
-  # matches a leading-zero spelling.)
+  # smtp_tls_wrappermode, see compute_tls_wrappermode), so the level must be
+  # mandatory; tls_level_wrapper_incompatible documents the postconf(5)
+  # rationale for why none/may/dane can never satisfy implicit TLS. Such a
+  # config could never have delivered mail, so reject it instead of rendering
+  # a dead relay. (Numeric -eq: RELAY_PORT is already validated numeric and
+  # in range, and -eq also matches a leading-zero spelling.)
   if [ "$RELAY_PORT" -eq 465 ] && tls_level_wrapper_incompatible; then
     printf 'level=error msg="RELAY_PORT=465 is implicit TLS; SMTP_TLS_SECURITY_LEVEL must be mandatory (encrypt or stronger; dane is opportunistic and degrades to may without TLSA records)" tls_level=%s\n' \
       "$SMTP_TLS_SECURITY_LEVEL" >&2
     exit 2
   fi
+
+  # dane/dane-only obtain TLS policy via DNSSEC-validated TLSA lookups,
+  # which need smtp_dns_support_level = dnssec (not rendered) plus a
+  # validating resolver; fingerprint needs smtp_tls_fingerprint_cert_match
+  # (not configurable in this image). Warn at boot: dane degrades to may,
+  # dane-only and fingerprint defer all mail with maillog-only diagnostics.
+  case "$SMTP_TLS_SECURITY_LEVEL" in
+    dane)
+      printf 'level=warn msg="SMTP_TLS_SECURITY_LEVEL=dane degrades to may in this image (smtp_dns_support_level=dnssec is not rendered, so DNSSEC-validated TLSA records are never found)" tls_level=dane\n' >&2
+      ;;
+    dane-only | fingerprint)
+      printf 'level=warn msg="SMTP_TLS_SECURITY_LEVEL cannot verify any peer in this image (dane-only needs DNSSEC TLSA lookups, fingerprint needs smtp_tls_fingerprint_cert_match; neither is rendered); every delivery will defer" tls_level=%s\n' "$SMTP_TLS_SECURITY_LEVEL" >&2
+      ;;
+  esac
 }
 
 # validate_runtime_config — runtime toggles and the filesystem contract.
