@@ -245,7 +245,7 @@ check_relay_host_warn() {
     # shellcheck source-path=SCRIPTDIR
     # shellcheck source=../validate.sh
     . "$ENTRYPOINT_DIR/validate.sh"
-    validate_relay_host_shape "$2" 2>&1 >/dev/null
+    validate_relay_host_shape "$2" 2>&1 >/dev/null || :
   )
   case "$_stderr" in
     *'contains a colon but is not an IPv6 address'*) _warned=1 ;;
