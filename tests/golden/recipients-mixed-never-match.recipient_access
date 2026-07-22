@@ -1,0 +1,3 @@
+/^user@example\.com$/ OK
+/@\.example\.com$/ OK
+/.*/ REJECT

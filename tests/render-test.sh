@@ -123,6 +123,14 @@ check_ok recipients-mixed-malformed \
   RELAY_HOST=smtp.example.com \
   "RECIPIENT_RESTRICTIONS=user@example.com /[/"
 
+# Mixed valid + deterministic never-match domain: the container still starts
+# on the valid subset. The leading-dot domain is warned, still rendered (a
+# dead line no recipient can ever match), and excluded from the
+# effective-rule count (2026-07 decision).
+check_ok recipients-mixed-never-match \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=user@example.com .example.com"
+
 # Valid ERE with a backreference: the alternation compile probe must prepend
 # its guaranteed-match alternative rather than wrap the pattern in a capture
 # group ('(P)|^probe$' renumbers \1 to the still-open outer group and
@@ -256,6 +264,22 @@ check_fail recipients-all-malformed 2 \
 check_fail recipients-all-malformed-parens 2 \
   RELAY_HOST=smtp.example.com \
   "RECIPIENT_RESTRICTIONS=/a)|(b/"
+
+# Every entry a deterministic never-match domain shape: a leading-dot domain
+# renders a rule Postfix loads but no recipient can ever match (no address
+# contains @.), so zero EFFECTIVE rules must trip the zero-rules guard —
+# the same operator outcome as the all-malformed list, reached through
+# rules Postfix loads-but-never-matches (2026-07 decision).
+check_fail recipients-all-never-match 2 \
+  RELAY_HOST=smtp.example.com \
+  RECIPIENT_RESTRICTIONS=.example.com
+
+# Slash-bearing domain token (a domain cannot contain /; almost certainly a
+# mis-typed regexp literal): the other deterministic never-match shape, same
+# zero-effective-rules outcome.
+check_fail recipients-all-never-match-slash 2 \
+  RELAY_HOST=smtp.example.com \
+  RECIPIENT_RESTRICTIONS=foo/bar
 
 check_fail bad-tls-level 2 \
   RELAY_HOST=smtp.example.com \

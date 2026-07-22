@@ -104,10 +104,12 @@ no second copy to keep in sync.
 - **Recipient tokens are escaped before regex.** `escape_postfix_regex`
   renders operator-supplied addresses and domains as literals inside
   Postfix `regexp:` patterns. A non-empty `RECIPIENT_RESTRICTIONS` that
-  yields zero effective rules (whitespace-only, or every entry a malformed
-  regex that Postfix would drop at map-open) is treated as a fatal error
-  (exit 2) rather than silently rejecting all mail; malformed entries in a
-  mixed list are warned about and excluded from the effective-rule count.
+  yields zero effective rules (whitespace-only, every entry a malformed
+  regex that Postfix would drop at map-open, or every entry a deterministic
+  never-match domain shape — a leading-dot or slash-bearing domain token)
+  is treated as a fatal error (exit 2) rather than silently rejecting all
+  mail; malformed or never-matching entries in a mixed list are warned
+  about and excluded from the effective-rule count.
 - **Exit codes.** `2` = config/validation failure, `1` = runtime failure.
   Keep that split when adding new failure paths.
 - **Runs as root by design.** Postfix's master needs root to bind port 25;

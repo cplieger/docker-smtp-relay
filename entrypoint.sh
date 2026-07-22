@@ -412,6 +412,27 @@ validate_runtime_config() {
         exit 2
       fi
     done
+    # PEM-shape hints, warn-only (2026-07 user decision; see the Tier 3
+    # note in validate.sh): a swapped cert/key pair — the classic operator
+    # mistake when both env vars are set together — or a non-PEM file
+    # passes the readable-file loop above, the startup line logs
+    # smtpd_tls=may|encrypt as if TLS were live, and every STARTTLS
+    # handshake then fails with maillog-only TLS-engine errors while the
+    # TCP-220 healthcheck stays green (the banner is pre-TLS). A cheap grep
+    # surfaces the swap at deploy time. The key marker matches every PEM
+    # private-key variant (RSA/EC/PKCS8 all end in "PRIVATE KEY"); a
+    # combined cert+key PEM mounted in both slots (which Postfix allows)
+    # carries both markers and passes both greps by design. No exit-code
+    # change: both checks are heuristics an exotic-but-working layout
+    # could trip.
+    if ! grep -q 'BEGIN CERTIFICATE' "$SMTPD_TLS_CERT_FILE" 2>/dev/null; then
+      printf 'level=warn msg="inbound TLS cert file does not contain a PEM CERTIFICATE block (cert and key swapped, or not PEM?)" path="%s"\n' \
+        "$(sanitize_token "$SMTPD_TLS_CERT_FILE")" >&2
+    fi
+    if ! grep -q 'PRIVATE KEY' "$SMTPD_TLS_KEY_FILE" 2>/dev/null; then
+      printf 'level=warn msg="inbound TLS key file does not contain a PEM PRIVATE KEY block (cert and key swapped, or not PEM?)" path="%s"\n' \
+        "$(sanitize_token "$SMTPD_TLS_KEY_FILE")" >&2
+    fi
     # The key is a private credential: flag a group- or world-readable mode
     # (read bit in either of the last two octal digits), but keep it a
     # warning — the operator may have deliberate group-read semantics on

@@ -53,7 +53,13 @@ validate_no_newlines() {
 #     heuristics; every $TLS_LEVELS entry is now fully supported, so no
 #     level-specific warn arms remain) are grandfathered-final, no new shape
 #     arms get added without a Tier 1/2 justification, and Postfix's own
-#     runtime diagnostics are the source of truth for them.
+#     runtime diagnostics are the source of truth for them. 2026-07 explicit
+#     user decisions on top of this baseline: the inbound TLS PEM-shape
+#     hints (entrypoint.sh, warn-only) were added, and the two deterministic
+#     never-match domain shapes in recipient-filter.sh keep their warns but
+#     no longer count as effective rules (an all-never-match list now trips
+#     the zero-effective-rules guard; mixed lists keep booting on the valid
+#     subset).
 
 # sanitize_token -- strip logfmt delimiters (backslash, double quote) and
 # control bytes (CR, VT, FF, ...), and bound the value to 512 bytes, so a

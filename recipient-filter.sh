@@ -93,9 +93,16 @@ emit_regexp_recipient_rule() {
 # emit_rcpt_line. Shares the _rcpt_tmp contract with build_recipient_filter:
 # fatal branches remove the temp file and exit 2. Returns 0 for an effective
 # rule; the regexp arm is its case arm's last command, so it propagates
-# emit_regexp_recipient_rule's ineffective status (10). The address/domain
-# arms end in emit_rcpt_line and keep returning 0 (their warns are shape
-# hints, not load failures).
+# emit_regexp_recipient_rule's ineffective status (10). The address arm ends
+# in emit_rcpt_line and keeps returning 0. The domain arm's two deterministic
+# never-match shapes (slash-bearing token, leading dot) warn, still emit the
+# rule line unchanged, and return 10 (ineffective) — same status-10 contract
+# as the regexp arms, so an all-never-match list trips the zero-effective-
+# rules guard while a mixed list still boots on its valid subset (2026-07
+# decision, extending the regexp-arm one: deterministic never-match domain
+# shapes are also excluded from the effective count by explicit user
+# decision; the warns themselves are unchanged shape hints, not load
+# failures — Postfix still loads these lines, it just never matches them).
 emit_recipient_rule() {
   case "$1" in
     *[[:space:]]*)
@@ -117,21 +124,29 @@ emit_recipient_rule() {
     *) # domain-only: anchor the @-suffix
       # A domain can never contain a slash, so a slash-bearing token here
       # is almost certainly a mis-typed regexp literal (e.g. `/foo`
-      # missing its closing delimiter). The escaped rule compiles but can
-      # never match a real recipient; surface that at deploy time.
-      # Warn-only: rejecting it would be a config-acceptance change.
+      # missing its closing delimiter), and a leading-dot domain can never
+      # match either (no address contains @.). Both are deterministic
+      # never-match shapes: warn, still emit the rule line unchanged, but
+      # return 10 (ineffective) so the entry no longer satisfies the
+      # zero-effective-rules guard — same mechanism as the regexp arms
+      # (2026-07 decision; the entry is still accepted, only its
+      # effective-count status changed).
+      _rcpt_status=0
       case "$1" in
         */*)
           printf 'level=warn msg="recipient restriction looks like a mis-typed regexp (a domain cannot contain /); this rule will never match any recipient" entry="%s"\n' \
             "$(sanitize_token "$1")" >&2
+          _rcpt_status=10
           ;;
         .*)
           printf 'level=warn msg="recipient restriction domain starts with a dot (Postfix subdomain syntax is not supported by this regexp map; no address contains @.); this rule will never match any recipient" entry="%s"\n' \
             "$(sanitize_token "$1")" >&2
+          _rcpt_status=10
           ;;
       esac
       _esc=$(escape_postfix_regex "$1")
       emit_rcpt_line "/@${_esc}\$/ OK"
+      return "$_rcpt_status"
       ;;
   esac
 }
@@ -160,12 +175,13 @@ build_recipient_filter() {
     done
     # Refuse to proceed if a non-empty RECIPIENT_RESTRICTIONS parses to zero
     # EFFECTIVE rules: whitespace-only value (quoting bug, empty-var
-    # expansion) or every entry malformed (warned above; Postfix drops each
-    # at map-open). Without this guard the map's only live line is
-    # `/.*/ REJECT`, Postfix rejects 100% of mail, and the healthcheck still
-    # reports green.
+    # expansion), every entry malformed (warned above; Postfix drops each
+    # at map-open), or every entry a deterministic never-match domain shape
+    # (warned above; Postfix loads the rule but no recipient can ever match
+    # it). Without this guard the map's only live line is `/.*/ REJECT`,
+    # Postfix rejects 100% of mail, and the healthcheck still reports green.
     if [ "$_rule_count" -eq 0 ]; then
-      printf 'level=error msg="RECIPIENT_RESTRICTIONS is non-empty but parsed zero effective rules (whitespace only, or every entry malformed?); refusing to reject all mail"\n' >&2
+      printf 'level=error msg="RECIPIENT_RESTRICTIONS is non-empty but parsed zero effective rules (whitespace only, or every entry malformed or never-matching?); refusing to reject all mail"\n' >&2
       rm -f "$_rcpt_tmp"
       exit 2
     fi
@@ -174,7 +190,8 @@ build_recipient_filter() {
     # shellcheck disable=SC2034 # consumed by caller after sourcing
     SMTPD_RECIPIENT_RESTRICTIONS="check_recipient_access regexp:${_rcpt_file}, reject"
     # Count only EFFECTIVE operator-supplied allow rules (entries Postfix
-    # will actually load; warned-ineffective ones are excluded), never the
+    # will actually load AND that can match a real recipient;
+    # warned-ineffective ones are excluded), never the
     # trailing /.*/ REJECT terminator — an internal implementation detail
     # that would confuse operators reading Loki.
     printf 'level=info msg="recipient filtering configured" rules=%d\n' \
