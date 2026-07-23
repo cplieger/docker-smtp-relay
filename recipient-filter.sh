@@ -436,7 +436,11 @@ emit_recipient_rule() {
             ;;
         esac
       fi
-      _esc=$(escape_postfix_regex "$1")
+      if ! _esc=$(escape_postfix_regex "$1"); then
+        printf 'level=error msg="failed to escape recipient restriction for rendering"\n' >&2
+        rm -f "$_rcpt_tmp"
+        exit 1
+      fi
       emit_rcpt_line "/^${_esc}\$/ OK"
       return "$_rcpt_status"
       ;;
@@ -463,7 +467,11 @@ emit_recipient_rule() {
           _rcpt_status=10
           ;;
       esac
-      _esc=$(escape_postfix_regex "$1")
+      if ! _esc=$(escape_postfix_regex "$1"); then
+        printf 'level=error msg="failed to escape recipient restriction for rendering"\n' >&2
+        rm -f "$_rcpt_tmp"
+        exit 1
+      fi
       emit_rcpt_line "/@${_esc}\$/ OK"
       return "$_rcpt_status"
       ;;

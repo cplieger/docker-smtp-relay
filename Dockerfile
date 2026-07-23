@@ -360,6 +360,7 @@ RUN ENTRYPOINT_DIR=/usr/local/bin sh /tmp/tests/render-test.sh \
         RECIPIENT_RESTRICTIONS="ops@example.com" \
         sh /usr/local/bin/entrypoint.sh render \
     && newaliases \
+    && postfix set-permissions \
     && postfix check \
     && { test "$(postconf -hx smtputf8_enable)" = "yes" \
       || { printf '%s\n' 'FAIL: smtputf8_enable is not yes in the rendered config' >&2; exit 1; }; } \
