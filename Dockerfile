@@ -174,6 +174,29 @@ RUN { wget --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz" \
        done \
     && rm -f /out/etc/postfix/*.default /out/etc/postfix/*LICENSE* \
         /out/etc/postfix/makedefs.out \
+    # Pre-sed gate for the postfix-files trim below: the sed selectors and
+    # the negative grep after it share the same spellings, so an upstream
+    # postfix-files format change could make both miss while the build still
+    # passes — and the rm above would have removed staged files that stale
+    # entries still reference, tripping `postfix set-permissions` at every
+    # boot instead of failing here. Assert each deletion selector matches an
+    # entry BEFORE mutation, proving every intended selector had an input.
+    # The shlib_directory/postfix- selector is asserted to match NOTHING:
+    # with dynamicmaps=no this build stages no postfix-*.so plugin entries,
+    # so that selector is purely defensive — if entries ever appear, fail
+    # the build so a human decides whether deleting them is still correct.
+    && { ! grep -q -e 'shlib_directory/postfix-' /out/etc/postfix/postfix-files \
+      || { printf '%s\n' 'FAIL: upstream postfix-files drift: unexpected shlib_directory/postfix- entries pre-trim (dynamicmaps=no should stage none)' >&2; exit 1; }; } \
+    && for _pf_sel in \
+        'meta_directory/makedefs\.out' \
+        'manpage_directory' \
+        'config_directory/LICENSE' \
+        'config_directory/TLS_LICENSE' \
+        'config_directory/[^/]\+\.cf\.default' \
+      ; do \
+        grep -q -e "$_pf_sel" /out/etc/postfix/postfix-files \
+          || { printf 'FAIL: upstream postfix-files drift: no entry matches pre-trim selector %s\n' "$_pf_sel" >&2; exit 1; }; \
+      done \
     && sed -i \
         -e '/shlib_directory\/postfix-/d' \
         -e '/meta_directory\/makedefs.out/d' \

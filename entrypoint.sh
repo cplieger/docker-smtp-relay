@@ -816,7 +816,27 @@ timeout_log_fields() {
 # write_sasl_secret — write the plaintext sasl_passwd, hash it with postmap,
 # then remove the plaintext. Run-mode only (writes a secret to disk).
 # ---------------------------------------------------------------------------
-cleanup_sasl_plaintext() { rm -f "$SASL_PASSWD_FILE"; }
+cleanup_sasl_plaintext() {
+  if rm -f "$SASL_PASSWD_FILE"; then
+    return 0
+  fi
+  # Unlink failed (e.g. directory-level restriction). Truncate the 0600 file
+  # in place so the credential bytes are gone even if the entry cannot be
+  # removed, then retry the unlink once.
+  : >"$SASL_PASSWD_FILE" 2>/dev/null || return 1
+  chmod 600 "$SASL_PASSWD_FILE" 2>/dev/null || true
+  rm -f "$SASL_PASSWD_FILE"
+}
+
+# Logging wrapper shared by every cleanup caller (EXIT trap, signal handler,
+# normal postmap path) so a retained plaintext credential is always surfaced
+# as a structured error instead of silently ignored.
+cleanup_sasl_plaintext_or_log() {
+  cleanup_sasl_plaintext && return 0
+  printf 'level=error msg="failed to remove plaintext SASL credentials file; credentials may remain on disk" path="%s"\n' \
+    "$(sanitize_token "$SASL_PASSWD_FILE")" >&2
+  return 1
+}
 
 # postmap_restricted — postmap under a restrictive umask so the newly created
 # map file is 0600. Runs as a run_interruptible background child, which is a
@@ -840,8 +860,11 @@ abort_sasl_secret() {
   # handler runs must not re-enter it mid-cleanup.
   trap - EXIT INT TERM HUP QUIT
   terminate_startup_child
-  cleanup_sasl_plaintext
-  printf 'level=info msg="received termination signal during SASL setup; cleaned up and aborting startup"\n' >&2
+  if cleanup_sasl_plaintext_or_log; then
+    printf 'level=info msg="received termination signal during SASL setup; cleaned up and aborting startup"\n' >&2
+  else
+    printf 'level=error msg="received termination signal during SASL setup; aborting startup with plaintext cleanup failure"\n' >&2
+  fi
   exit 1
 }
 
@@ -852,7 +875,7 @@ write_sasl_secret() {
   # `set -e` before the explicit rm below runs. A terminating signal both
   # cleans up AND aborts (abort_sasl_secret exits non-zero) so a stop request
   # mid-write is not swallowed.
-  trap cleanup_sasl_plaintext EXIT
+  trap 'cleanup_sasl_plaintext_or_log || true' EXIT
   trap abort_sasl_secret INT TERM HUP QUIT
 
   # Write credentials with restrictive permissions from the start (umask 077
@@ -892,13 +915,9 @@ write_sasl_secret() {
   chmod 600 "${SASL_PASSWD_FILE}.db" "${SASL_PASSWD_FILE}.lmdb" 2>/dev/null || true
   # Remove plaintext credentials; Postfix only reads the hashed map
   # (.lmdb in this image -- hash: maps use LMDB, see Dockerfile). A failed
-  # unlink leaves the plaintext on disk: surface it as a structured error
-  # instead of a raw set -e death (the EXIT trap would only retry silently).
-  if ! cleanup_sasl_plaintext; then
-    printf 'level=error msg="failed to remove plaintext SASL credentials file; refusing to start with plaintext credentials on disk" path="%s"\n' \
-      "$(sanitize_token "$SASL_PASSWD_FILE")" >&2
-    exit 1
-  fi
+  # cleanup leaves the plaintext on disk: the wrapper logs a structured error
+  # and startup refuses to continue instead of a raw set -e death.
+  cleanup_sasl_plaintext_or_log || exit 1
   # Drop only the EXIT cleanup trap and re-arm the startup handler: clearing
   # all traps here would leave the rest of startup (postfix checks, upstream
   # probe) without signal handling as PID 1.
