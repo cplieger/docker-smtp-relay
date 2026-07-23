@@ -1,0 +1,2 @@
+/[A-Z]/i OK
+/.*/ REJECT

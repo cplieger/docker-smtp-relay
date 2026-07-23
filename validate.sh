@@ -36,11 +36,17 @@ validate_no_newlines() {
 #     newline/metacharacter checks), open-relay CIDR rejection, credential
 #     exposure (SASL field format; cleartext TLS with SASL), and any input
 #     that silently turns a configured restriction into allow-all (the
-#     empty / slash-leading recipient regex class, and — a new explicit
-#     closed-set grant, 2026-07 round-3 judgement + user batch-closure
-#     approval — the universal-match regexp class: any recipient pattern
-#     the two-impossible-probe guard in recipient-filter.sh flags as
-#     matching every recipient).
+#     empty / slash-leading recipient regex class — extended by the 2026-07
+#     round-4 grant to the dual form's empty pattern halves — and, an
+#     explicit closed-set grant, 2026-07 round-3 judgement + user
+#     batch-closure approval, the universal-match regexp class: any
+#     recipient construct the two-impossible-probe guard in
+#     recipient-filter.sh flags as possibly allow-all. 2026-07 round-4
+#     reshaped that guard: it now applies to the FULL construct — single
+#     form iff P matches a probe, dual form iff P1 matches AND NOT P2 —
+#     with per-half flag-mirrored probes, and its fatal message states the
+#     honest possibly-allow-all heuristic plus the split / leave-empty
+#     remediations instead of claiming a proof).
 #   Tier 2 (fatal, documented contract): value combinations the app's own
 #     documented contract says can never function -- the implicit-TLS 465
 #     mandatory-level gate, the landed never-matching-shape escalations
@@ -66,7 +72,19 @@ validate_no_newlines() {
 #     subset). 2026-07 round-3 explicit grant, same template: the three
 #     deterministic never-match address shapes in recipient-filter.sh
 #     (empty local part, empty domain, dot-after-@) warn and no longer
-#     count as effective rules either.
+#     count as effective rules either. 2026-07 round-4 grants (user
+#     dispositions, one coherent redesign of the regexp-token seam in
+#     recipient-filter.sh): any token STARTING with / classifies as
+#     regexp-family; the regexp_table(5) dual-pattern form
+#     /P1/[flags]!/P2/[flags] and the /pattern/flags form (flag set i/m/x,
+#     verified in-image against the pinned Postfix) are fully supported —
+#     structure-parsed, per-half compile-probed with flag-mirrored grep,
+#     and emitted verbatim as effective rules; a structurally unparseable
+#     leading-/ token (no closing delimiter, dangling or doubled !,
+#     unknown flag) draws a warn and is SUPPRESSED (status 10), REPLACING
+#     the old unescaped-delimiter heuristic and its inaccurate wording;
+#     and mid-token slashes in address tokens are correct escaped literals
+#     (/ is RFC 5321 atext — never warned).
 
 # sanitize_token -- strip logfmt delimiters (backslash, double quote) and
 # control bytes (CR, VT, FF, ...), and bound the value to 512 bytes, so a

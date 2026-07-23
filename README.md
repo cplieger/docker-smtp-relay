@@ -77,7 +77,7 @@ services:
 | `SMTPD_TLS_SECURITY_LEVEL`        | Inbound TLS level: `may` (opportunistic — STARTTLS offered, cleartext still accepted) or `encrypt` (require TLS from every sender). Only meaningful with the cert/key pair set; setting it without the pair is rejected.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | `may` when certs set                      | No       |
 | `MESSAGE_SIZE_LIMIT`              | Maximum message size in bytes (default 10240000 = 10 MB, AWS SES supports up to 40 MB with limit increase)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | `10240000`                                | No       |
 | `ACCEPTED_NETWORKS`               | Space-separated CIDRs allowed to send mail through this relay. If unset, the entrypoint defaults to all RFC 1918 ranges (`192.168.0.0/16 172.16.0.0/12 10.0.0.0/8`); the shipped compose example deliberately narrows this to `192.168.0.0/16`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | `192.168.0.0/16 172.16.0.0/12 10.0.0.0/8` | No       |
-| `RECIPIENT_RESTRICTIONS`          | Optional recipient filter; space-separated addresses, domains, or regex patterns. Regex tokens use Postfix `/.../` delimiters (e.g. `/^alerts-.*@example\.com$/`); backslash-escape a literal `/` inside the pattern. Tokens that are malformed or can never match — a bad regex, a domain with a leading dot (subdomain syntax is unsupported) or an embedded `/`, an address with an empty local part or domain or a dot right after the `@` — are warned about and skipped (the valid remainder still applies); if every entry is bad the container refuses to start (exit 2). A regex matching every recipient (`/.*/`, or an empty alternation branch like `/a@b\.c\|/`) is also rejected (exit 2). If set, only matching recipients are accepted; leave empty to allow all.  | ``                                        | No       |
+| `RECIPIENT_RESTRICTIONS`          | Optional recipient allowlist: space-separated address, domain, and Postfix regexp tokens (including `/pattern/flags` and `/pattern1/!/pattern2/` forms). If set, only matching recipients are accepted; leave empty to allow all. Misconfigurations fail the boot loudly — see [Recipient filtering](#recipient-filtering) below.                                                                                                                                                                                                                                                                                                                                                                                                                                                  | ``                                        | No       |
 | `SMTP_HOSTNAME`                   | Postfix `myhostname` / HELO identity. Use an FQDN — some receiving MTAs reject non-FQDN HELO names. Validation rejects whitespace and shell metacharacters; it does not enforce FQDN shape.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | `smtp-relay.local`                        | No       |
 | `STARTUP_PROBE`                   | Run a fail-soft TCP reachability check against the upstream relay at startup. Catches DNS/routing/port/firewall misconfiguration at deploy time; a failure logs a warning and the relay still starts (mail queues). Does not verify SASL credentials or the TLS chain. `true` or `false`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | `true`                                    | No       |
 | `STARTUP_PROBE_TIMEOUT`           | Timeout in seconds for the startup reachability probe (1-10; kept under the 15s healthcheck start-period so a slow probe never delays readiness).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | `5`                                       | No       |
@@ -140,6 +140,79 @@ STARTTLS offer, and clients that do not verify the certificate gain no
 authentication from it. `encrypt` requires every sender to negotiate TLS
 before mail is accepted — verify your senders actually support STARTTLS
 first, or their mail is refused at the door.
+
+### Recipient filtering
+
+`RECIPIENT_RESTRICTIONS` is an optional allowlist evaluated at the door:
+when set, only matching recipients are accepted (non-matching mail is
+refused with an smtpd `NOQUEUE: reject`). Four token forms are supported,
+space-separated in the one variable:
+
+- **Address** — `alerts@example.com`. Rendered as an anchored, escaped
+  literal; matches exactly that address. A `/` inside the local part
+  (`john/doe@example.com`) is legal address syntax and is matched
+  literally.
+- **Domain** — `example.org`. Matches every recipient at exactly that
+  domain. Subdomain syntax (`.example.org`) is not supported and is warned
+  as never-matching.
+- **Regexp** — `/^ops-.*@example\.net$/`, a Postfix
+  [regexp_table(5)](https://www.postfix.org/regexp_table.5.html) pattern
+  emitted verbatim; backslash-escape a literal `/` inside the pattern. The
+  flag-suffixed form `/pattern/flags` is supported with flags `i`, `m`,
+  and `x`: per regexp_table(5), matching is case-insensitive with extended
+  syntax by default, and each flag occurrence toggles its property (`i`
+  case sensitivity, `x` extended-vs-basic syntax, `m` multi-line) — so
+  `/^alerts@example\.com$/i` matches only the lowercase spelling.
+- **Dual-pattern regexp** — `/pattern1/!/pattern2/` (either half may carry
+  flags): matches recipients that match `pattern1` AND NOT `pattern2`,
+  e.g. `/.*@example\.com/!/^noreply@/` for "the whole domain, except
+  noreply addresses".
+
+Regexp tokens are matched against the full recipient address as smtpd
+presents it (`user@domain` form), and never-match analysis is not
+attempted for regexp tokens: a compiling, non-universal pattern that can
+never match — e.g. the anchored `/^@example\.com$/` — still counts as an
+effective rule; regex authors own their reachability.
+
+**Never-match warns.** Deterministic never-match tokens are warned at boot
+and excluded from the effective-rule count, but still rendered: a domain
+with a leading dot or an embedded `/`, and an address with an empty local
+part, an empty domain, or a dot right after the `@` (a bare `@` classifies
+as empty-local). A regexp pattern half that does not compile is warned the
+same way (Postfix drops that line at map load). A leading-`/` token whose
+structure cannot be parsed at all — no closing delimiter, a dangling or
+doubled `!`, an unknown flag character — is warned and additionally
+suppressed from the map: a rule this image could not validate might load
+in Postfix with semantics that were never checked.
+
+**Zero-effective-rules guard (exit 2).** A non-empty
+`RECIPIENT_RESTRICTIONS` in which every token is malformed, unparseable,
+or never-matching would render a filter whose only live line rejects
+everything; the container refuses to start instead. A mixed list still
+boots on its valid subset.
+
+**Universal-match guard (exit 2).** Every regexp construct is probed
+against two fixed, impossible addresses, with the construct's effective
+flags mirrored and the dual form evaluated as `P1 AND NOT P2`. A construct
+matching BOTH probes is treated as possibly allow-all — an honest
+heuristic, not a proof — and refused, because the rendered rule would
+allow all mail: `/.*/`, `/./`, an empty alternation branch like
+`/a@b\.c|/`, and the dual near-allow-all `/.*/!/^noreply@/` are all
+refused. An empty pattern (`//`, or an empty dual half like `/x/!//`) is
+refused for the same reason: an empty pattern matches every string.
+Remediations: split a narrow alternation into separate
+`RECIPIENT_RESTRICTIONS` entries, and leave `RECIPIENT_RESTRICTIONS`
+empty only if allow-all is intended. The heuristic can over-refuse a
+pattern that merely shares structure or characters with both probes (for
+example one alternation spanning `\.invalid$` and `\.test$`); the split
+remediation resolves the plausible cases — `/\.invalid$/` and `/\.test$/`
+as separate entries each match at most one probe and pass.
+
+**Fail-closed rationale.** All of the above fails loud at boot rather
+than silently rejecting mail the operator wanted relayed or allowing mail
+the operator wanted refused — the healthcheck cannot see either failure
+(port 25 answers either way), so a boot-time exit 2 with a structured
+error is the only honest signal.
 
 ### Volumes
 

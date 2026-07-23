@@ -28,7 +28,16 @@ runs. Three scripts are copied into `/usr/local/bin/` and run as a unit:
   `validate_fingerprint_digest`, `validate_fingerprint_match`,
   `validate_sasl_*`). Sourced by the entrypoint; no side effects.
 - `recipient-filter.sh` — builds `/etc/postfix/recipient_access` and sets
-  `SMTPD_RECIPIENT_RESTRICTIONS` from `RECIPIENT_RESTRICTIONS`.
+  `SMTPD_RECIPIENT_RESTRICTIONS` from `RECIPIENT_RESTRICTIONS`. Its regexp
+  arm is helper-decomposed: `parse_regexp_construct` (with `_rx_scan_pattern`)
+  structure-parses a leading-`/` token into the supported regexp_table(5)
+  forms (`/P/`, `/P/flags`, `/P1/[flags]!/P2/[flags]`), `half_flag_state`
+  folds a half's flags into its effective matcher state (i/x toggle parity;
+  the flag set and toggle directions were verified in-image with
+  `postmap -q` probes against the pinned Postfix — re-verify on a major
+  bump), `regex_half_compiles` / `regex_half_matches` run the flag-mirrored
+  grep probes per pattern half, and `regexp_construct_matches` evaluates the
+  FULL construct (dual form: P1 AND NOT P2) for the universal-match guard.
 
 Validation is data-driven: `_spec_table` in `entrypoint.sh` maps each
 env var to a comma-separated list of checks (`nl`, `num`, `meta`,
@@ -103,19 +112,29 @@ no second copy to keep in sync.
   a checked-in config file.
 - **Recipient tokens are escaped before regex.** `escape_postfix_regex`
   renders operator-supplied addresses and domains as literals inside
-  Postfix `regexp:` patterns. A non-empty `RECIPIENT_RESTRICTIONS` that
+  Postfix `regexp:` patterns (a mid-token `/` in an address is legal
+  RFC 5321 atext and is escaped, never warned). Leading-`/` tokens are
+  regexp-family: structure-parsed into the supported regexp_table(5)
+  forms (plain, `/pattern/flags`, dual `/P1/[flags]!/P2/[flags]`) and
+  emitted verbatim; a structurally unparseable leading-`/` token is
+  warned and suppressed (not emitted — its in-Postfix semantics were
+  never validated), unlike never-match warns, which still emit their
+  dead line. A non-empty `RECIPIENT_RESTRICTIONS` that
   yields zero effective rules (whitespace-only, every entry a malformed
-  regex that Postfix would drop at map-open, or every entry a deterministic
+  regex that Postfix would drop at map-open or an unparseable structure,
+  or every entry a deterministic
   never-match domain or address shape — a leading-dot or slash-bearing
   domain token, or an address with an empty local part, an empty domain,
   or a dot immediately after the `@`)
   is treated as a fatal error (exit 2) rather than silently rejecting all
   mail; malformed or never-matching entries in a mixed list are warned
-  about and excluded from the effective-rule count. Regexp tokens are also
-  probed against two fixed impossible addresses: a pattern that matches
-  both is universal (allow-all — e.g. an empty alternation branch or
-  `/.*/`) and is rejected fatally (exit 2) rather than silently allowing
-  all mail.
+  about and excluded from the effective-rule count. Regexp constructs are
+  also probed against two fixed impossible addresses with flag-mirrored
+  probes (dual form: P1 AND NOT P2): a construct that matches both is
+  treated as possibly allow-all (e.g. an empty alternation branch,
+  `/.*/`, or `/.*/!/^noreply@/`) and rejected fatally (exit 2) rather
+  than silently allowing all mail; empty pattern halves (`//`, `/x/!//`)
+  are fatal too.
 - **Exit codes.** `2` = config/validation failure, `1` = runtime failure.
   Keep that split when adding new failure paths.
 - **Runs as root by design.** Postfix's master needs root to bind port 25;

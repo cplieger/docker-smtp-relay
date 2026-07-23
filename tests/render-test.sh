@@ -347,8 +347,10 @@ check_fail recipients-universal-case-insensitive 2 \
   "RECIPIENT_RESTRICTIONS=/[A-Z]/"
 
 # The structured error line for the universal-pattern rejection is a log
-# contract (names the class and the remediation); pin it for one case.
-check_log recipients-universal-error-log 2 'matches every recipient' \
+# contract (names the honest possibly-allow-all heuristic and the split /
+# leave-empty remediations; round-4 wording — it must never claim "matches
+# every recipient"); pin it for one case.
+check_log recipients-universal-error-log 2 'matches both universal-match safety probes' \
   RELAY_HOST=smtp.example.com \
   "RECIPIENT_RESTRICTIONS=/.*/"
 
@@ -364,6 +366,93 @@ check_ok recipients-anchored-empty-branch \
 check_ok recipients-optional-suffix-group \
   RELAY_HOST=smtp.example.com \
   "RECIPIENT_RESTRICTIONS=/alerts(|-dev)@example\.com/"
+
+# --- regexp_table(5) dual-pattern and flags forms (round-4) -----------------
+# The dual form /pattern1/!/pattern2/ (matches P1 AND NOT P2) is emitted
+# verbatim and counted effective: Postfix parses it natively (verified
+# in-image with postmap -q on the pinned 3.11.5).
+check_ok recipients-dual-form \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=/.*@example\.com/!/^noreply@/"
+
+# Construct-level universal guard: a universal P1 with a narrow except
+# matches both safety probes (the except excludes neither probe), so the
+# FULL construct is possibly allow-all and is refused — near-allow-all must
+# be spelled as the empty var. The supported narrowing idiom above matches
+# neither probe and passes.
+check_log recipients-dual-universal 2 'matches both universal-match safety probes' \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=/.*/!/^noreply@/"
+
+# Dual tokens mix with address and domain tokens; the effective count stays
+# truthful (all three load and can match).
+check_ok recipients-dual-mixed \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=alerts@example.com example.org /.*@example\.net/!/^noreply@/"
+
+check_log recipients-dual-mixed-rules 0 'rules=3' \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=alerts@example.com example.org /.*@example\.net/!/^noreply@/"
+
+# An empty pattern half in a dual construct is fatal, same posture as the
+# landed // empty-pattern arm: an empty half matches every string, so the
+# construct cannot mean what was configured.
+check_fail recipients-dual-empty-first-half 2 \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=//!/x/"
+
+check_fail recipients-dual-empty-second-half 2 \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=/x/!//"
+
+# Flag-suffixed pattern (regexp_table(5) flags, verified set i/m/x): the
+# c11 finding's exact spelling boots as an effective rule emitted verbatim
+# (it used to fall through to the address arm as a silent never-match
+# escaped literal).
+check_ok recipients-flags-case-sensitive \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=/^alerts@example\.com$/i"
+
+# Probe flag-mirroring, both toggle directions (verified in-image on
+# 3.11.5: matching is case-insensitive by DEFAULT and i toggles it OFF):
+# /[A-Z]/i is case-SENSITIVE — it matches neither all-lowercase safety
+# probe (restrictive: matches only uppercase-bearing recipients) and must
+# boot, while plain /[A-Z]/ (default-insensitive, universal) stays fatal
+# per recipients-universal-case-insensitive above.
+check_ok recipients-flags-case-sensitive-class \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=/[A-Z]/i"
+
+# Unknown flag char: postmap (3.11.5) warns 'unknown regexp option' and
+# skips the rule while the rest of the map loads; mirrored as unparseable
+# structure — warn + suppressed + ineffective, so an all-such list trips
+# the zero-effective-rules guard.
+check_log recipients-unknown-flag 2 'cannot parse regexp token structure' \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=/alerts@example\.com/z"
+
+# Unparseable structure (mid-token unescaped delimiters — the round-4
+# replacement for the old unescaped-delimiter heuristic and its inaccurate
+# "Postfix will ignore this rule" wording): warn + suppressed; all-such
+# exits 2 via the zero-effective-rules guard.
+check_log recipients-unparseable-structure 2 'cannot parse regexp token structure' \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=/a/b/c/"
+
+# Mixed valid + unparseable structure: the container boots on the valid
+# subset and the unparseable token is SUPPRESSED from the rendered map
+# (the golden pins the absence — unlike never-match warns, an unvalidated
+# structure is never emitted).
+check_ok recipients-mixed-unparseable \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=user@example.com /a/b/c/"
+
+# A mid-token slash WITHOUT a leading slash is legal RFC 5321 atext, not
+# regexp syntax: john/doe@example.com boots silently as an escaped
+# address-arm literal (the golden pins the escaped \/ rendering).
+check_ok recipients-address-literal-slash \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=john/doe@example.com"
 
 # Every entry malformed (the ERE does not compile): zero EFFECTIVE rules must
 # trip the zero-rules guard instead of rendering a map whose only live line
