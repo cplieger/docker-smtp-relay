@@ -195,8 +195,8 @@ boots on its valid subset.
 against two fixed, impossible addresses, with the construct's effective
 flags mirrored and the dual form evaluated as `P1 AND NOT P2`. A construct
 matching BOTH probes is treated as possibly allow-all — an honest
-heuristic, not a proof — and refused, because the rendered rule would
-allow all mail: `/.*/`, `/./`, an empty alternation branch like
+heuristic, not a proof — and refused as an accidental-breadth risk:
+`/.*/`, `/./`, an empty alternation branch like
 `/a@b\.c|/`, and the dual near-allow-all `/.*/!/^noreply@/` are all
 refused. An empty pattern (`//`, or an empty dual half like `/x/!//`) is
 refused for the same reason: an empty pattern matches every string.

@@ -29,7 +29,7 @@ runs. Three scripts are copied into `/usr/local/bin/` and run as a unit:
   `validate_sasl_*`). Sourced by the entrypoint; no side effects.
 - `recipient-filter.sh` — builds `/etc/postfix/recipient_access` and sets
   `SMTPD_RECIPIENT_RESTRICTIONS` from `RECIPIENT_RESTRICTIONS`. Its regexp
-  arm is helper-decomposed: `parse_regexp_construct` (with `_rx_scan_pattern`)
+  arm is helper-decomposed: `parse_regexp_construct` (one linear awk pass)
   structure-parses a leading-`/` token into the supported regexp_table(5)
   forms (`/P/`, `/P/flags`, `/P1/[flags]!/P2/[flags]`), `half_flag_state`
   folds a half's flags into its effective matcher state (i/x toggle parity;

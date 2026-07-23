@@ -424,6 +424,24 @@ check_ok recipients-flags-case-sensitive-class \
   RELAY_HOST=smtp.example.com \
   "RECIPIENT_RESTRICTIONS=/[A-Z]/i"
 
+# Escaped slash inside a regexp token stays inside the pattern (the parser
+# preserves the \/ escape verbatim); the token boots as one effective rule.
+check_log recipients-regexp-escaped-slash 0 'rules=1' \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=/a\/b@example\.com$/"
+
+# Repeated flags re-toggle (ii restores the default-insensitive state);
+# the token is effective and emitted verbatim.
+check_log recipients-flags-repeated 0 'rules=1' \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=/^alerts@example\.com$/ii"
+
+# x flag switches the compile/match probes to BASIC regex syntax -- the only
+# coverage of regex_half_compiles' BRE branch and its ^probe$\| backstop.
+check_log recipients-flags-basic-syntax 0 'rules=1' \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=/^alerts@example\.com$/x"
+
 # Unknown flag char: postmap (3.11.5) warns 'unknown regexp option' and
 # skips the rule while the rest of the map loads; mirrored as unparseable
 # structure — warn + suppressed + ineffective, so an all-such list trips
