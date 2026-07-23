@@ -38,6 +38,20 @@ emit_rcpt_line() {
   fi
 }
 
+# emit_escaped_literal_rule ANCHOR TOKEN -- escape TOKEN for literal matching
+# and append the anchored rule line (ANCHOR is '/^' for the address arm,
+# '/@' for the domain arm). A sed failure is a runtime error: structured
+# level=error, temp-file cleanup, exit 1 -- the contract both literal arms
+# previously duplicated inline.
+emit_escaped_literal_rule() {
+  if ! _esc=$(escape_postfix_regex "$2"); then
+    printf 'level=error msg="failed to escape recipient restriction for rendering"\n' >&2
+    rm -f "$_rcpt_tmp"
+    exit 1
+  fi
+  emit_rcpt_line "${1}${_esc}\$/ OK"
+}
+
 # parse_regexp_construct TOKEN — structure-parse a leading-/ token into the
 # regexp_table(5) forms this image supports:
 #   /P/                        plain pattern
@@ -436,12 +450,7 @@ emit_recipient_rule() {
             ;;
         esac
       fi
-      if ! _esc=$(escape_postfix_regex "$1"); then
-        printf 'level=error msg="failed to escape recipient restriction for rendering"\n' >&2
-        rm -f "$_rcpt_tmp"
-        exit 1
-      fi
-      emit_rcpt_line "/^${_esc}\$/ OK"
+      emit_escaped_literal_rule '/^' "$1"
       return "$_rcpt_status"
       ;;
     *) # domain-only: anchor the @-suffix
@@ -467,12 +476,7 @@ emit_recipient_rule() {
           _rcpt_status=10
           ;;
       esac
-      if ! _esc=$(escape_postfix_regex "$1"); then
-        printf 'level=error msg="failed to escape recipient restriction for rendering"\n' >&2
-        rm -f "$_rcpt_tmp"
-        exit 1
-      fi
-      emit_rcpt_line "/@${_esc}\$/ OK"
+      emit_escaped_literal_rule '/@' "$1"
       return "$_rcpt_status"
       ;;
   esac
