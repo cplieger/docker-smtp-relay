@@ -430,17 +430,17 @@ check_log recipients-regexp-escaped-slash 0 'rules=1' \
   RELAY_HOST=smtp.example.com \
   "RECIPIENT_RESTRICTIONS=/a\/b@example\.com$/"
 
-# Repeated flags re-toggle (ii restores the default-insensitive state);
-# the token is effective and emitted verbatim.
-check_log recipients-flags-repeated 0 'rules=1' \
+# ii restores default case-insensitive matching, so [A-Z] again matches
+# both lowercase safety probes and must hit the universal-match guard.
+check_log recipients-flags-repeated 2 'possibly allow-all' \
   RELAY_HOST=smtp.example.com \
-  "RECIPIENT_RESTRICTIONS=/^alerts@example\.com$/ii"
+  "RECIPIENT_RESTRICTIONS=/[A-Z]/ii"
 
-# x flag switches the compile/match probes to BASIC regex syntax -- the only
-# coverage of regex_half_compiles' BRE branch and its ^probe$\| backstop.
-check_log recipients-flags-basic-syntax 0 'rules=1' \
+# Under x/BRE, \( is an unmatched group opener and must fail compilation;
+# under ERE it is a valid literal parenthesis, so this pins the x toggle.
+check_log recipients-flags-basic-syntax 2 'does not compile' \
   RELAY_HOST=smtp.example.com \
-  "RECIPIENT_RESTRICTIONS=/^alerts@example\.com$/x"
+  "RECIPIENT_RESTRICTIONS=/\(/x"
 
 # Unknown flag char: postmap (3.11.5) warns 'unknown regexp option' and
 # skips the rule while the rest of the map loads; mirrored as unparseable
