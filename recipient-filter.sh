@@ -218,12 +218,6 @@ set_regexp_flag_states() {
   fi
 }
 
-# classify_regexp_halves — compile-probe each parsed pattern half with its
-# flag-mirrored grep syntax (same warn + status 10 handling as always,
-# applied to each half; the round-1 all-malformed -> exit-2 semantics are
-# unchanged because status 10 keeps the token out of the effective count).
-# Sets _rcpt_status: 0 when every half compiles, 10 (ineffective) when
-# either half draws the compile warn.
 # warn_uncompilable_half PATTERN -- single source of the compile-warn log
 # contract (the wording is Loki-queried; two hand-kept copies can drift)
 # plus the shared ineffective-status bookkeeping.
@@ -233,6 +227,12 @@ warn_uncompilable_half() {
   _rcpt_status=10
 }
 
+# classify_regexp_halves — compile-probe each parsed pattern half with its
+# flag-mirrored grep syntax (same warn + status 10 handling as always,
+# applied to each half; the round-1 all-malformed -> exit-2 semantics are
+# unchanged because status 10 keeps the token out of the effective count).
+# Sets _rcpt_status: 0 when every half compiles, 10 (ineffective) when
+# either half draws the compile warn.
 classify_regexp_halves() {
   _rcpt_status=0
   regex_half_compiles "$_rx_p1" "$_rx_ext1" || warn_uncompilable_half "$_rx_p1"

@@ -43,7 +43,7 @@ readonly MAIN_CF="${CONF_DIR}/main.cf"
 # RELAY_PORT                       integer   587                  1-65535
 # RELAY_LOGIN                      string    ""                   no whitespace or colons
 # RELAY_PASSWORD                   string    ""                   no whitespace
-# RECIPIENT_RESTRICTIONS           string    ""                   space-separated; addresses, domains, or /regex/
+# RECIPIENT_RESTRICTIONS           string    ""                   space-separated; addresses, domains, or regexp constructs (/P/, /P/flags, /P1/[flags]!/P2/[flags])
 # SMTP_TLS_SECURITY_LEVEL          enum      secure               one of $TLS_LEVELS (see validate.sh); not none/may/dane with RELAY_PORT=465; fingerprint requires SMTP_TLS_FINGERPRINT_CERT_MATCH
 # SMTP_TLS_FINGERPRINT_CERT_MATCH  string    ""                   space-separated digests, each colon-separated hex pairs; both-or-neither with level=fingerprint
 # SMTP_TLS_FINGERPRINT_DIGEST      enum      sha256               sha256|sha512 only; explicitly setting it at a non-fingerprint level is fatal
@@ -860,7 +860,10 @@ write_sasl_secret() {
   # pre-existing plaintext first: redirection to an existing file truncates
   # but preserves its mode, so only the create path honors the umask — same
   # guard the hashed map gets before postmap below.
-  rm -f "$SASL_PASSWD_FILE"
+  if ! rm -f "$SASL_PASSWD_FILE"; then
+    printf 'level=error msg="failed to remove pre-existing SASL credentials file" path="%s"\n' "$(sanitize_token "$SASL_PASSWD_FILE")" >&2
+    exit 1
+  fi
   if ! (umask 077 && printf '%s %s:%s\n' "$RELAYHOST_VALUE" "$RELAY_LOGIN" "$RELAY_PASSWORD" \
     >"$SASL_PASSWD_FILE"); then
     printf 'level=error msg="failed to write SASL credentials file" path="%s"\n' "$(sanitize_token "$SASL_PASSWD_FILE")" >&2
@@ -874,7 +877,10 @@ write_sasl_secret() {
   # the table format, not a digest; the map stores login and password
   # verbatim. Remove any pre-existing map first so the umask controls the
   # recreated file.
-  rm -f "${SASL_PASSWD_FILE}.db" "${SASL_PASSWD_FILE}.lmdb"
+  if ! rm -f "${SASL_PASSWD_FILE}.db" "${SASL_PASSWD_FILE}.lmdb"; then
+    printf 'level=error msg="failed to remove pre-existing SASL map; refusing to let postmap reuse a possibly permissive map file" path="%s"\n' "$(sanitize_token "$SASL_PASSWD_FILE")" >&2
+    exit 1
+  fi
   _postmap_status=0
   run_interruptible postmap_restricted "$SASL_PASSWD_FILE" || _postmap_status=$?
   if [ "$_postmap_status" -ne 0 ]; then
