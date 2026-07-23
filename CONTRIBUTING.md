@@ -106,10 +106,16 @@ no second copy to keep in sync.
   Postfix `regexp:` patterns. A non-empty `RECIPIENT_RESTRICTIONS` that
   yields zero effective rules (whitespace-only, every entry a malformed
   regex that Postfix would drop at map-open, or every entry a deterministic
-  never-match domain shape — a leading-dot or slash-bearing domain token)
+  never-match domain or address shape — a leading-dot or slash-bearing
+  domain token, or an address with an empty local part, an empty domain,
+  or a dot immediately after the `@`)
   is treated as a fatal error (exit 2) rather than silently rejecting all
   mail; malformed or never-matching entries in a mixed list are warned
-  about and excluded from the effective-rule count.
+  about and excluded from the effective-rule count. Regexp tokens are also
+  probed against two fixed impossible addresses: a pattern that matches
+  both is universal (allow-all — e.g. an empty alternation branch or
+  `/.*/`) and is rejected fatally (exit 2) rather than silently allowing
+  all mail.
 - **Exit codes.** `2` = config/validation failure, `1` = runtime failure.
   Keep that split when adding new failure paths.
 - **Runs as root by design.** Postfix's master needs root to bind port 25;

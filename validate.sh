@@ -36,7 +36,11 @@ validate_no_newlines() {
 #     newline/metacharacter checks), open-relay CIDR rejection, credential
 #     exposure (SASL field format; cleartext TLS with SASL), and any input
 #     that silently turns a configured restriction into allow-all (the
-#     empty / slash-leading recipient regex class).
+#     empty / slash-leading recipient regex class, and — a new explicit
+#     closed-set grant, 2026-07 round-3 judgement + user batch-closure
+#     approval — the universal-match regexp class: any recipient pattern
+#     the two-impossible-probe guard in recipient-filter.sh flags as
+#     matching every recipient).
 #   Tier 2 (fatal, documented contract): value combinations the app's own
 #     documented contract says can never function -- the implicit-TLS 465
 #     mandatory-level gate, the landed never-matching-shape escalations
@@ -59,7 +63,10 @@ validate_no_newlines() {
 #     never-match domain shapes in recipient-filter.sh keep their warns but
 #     no longer count as effective rules (an all-never-match list now trips
 #     the zero-effective-rules guard; mixed lists keep booting on the valid
-#     subset).
+#     subset). 2026-07 round-3 explicit grant, same template: the three
+#     deterministic never-match address shapes in recipient-filter.sh
+#     (empty local part, empty domain, dot-after-@) warn and no longer
+#     count as effective rules either.
 
 # sanitize_token -- strip logfmt delimiters (backslash, double quote) and
 # control bytes (CR, VT, FF, ...), and bound the value to 512 bytes, so a

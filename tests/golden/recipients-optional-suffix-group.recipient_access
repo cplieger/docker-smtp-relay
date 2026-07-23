@@ -1,0 +1,2 @@
+/alerts(|-dev)@example\.com/ OK
+/.*/ REJECT
