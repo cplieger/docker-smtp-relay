@@ -6,7 +6,8 @@
 # recipient_access to $CONF_DIR without invoking Postfix or writing secrets)
 # against a matrix of env inputs, and diffs the generated files against the
 # committed fixtures in tests/golden/. Failure cases assert the validation
-# exit code (2). Pure POSIX sh; needs only sh, sed, diff, mktemp.
+# exit code (2). Pure POSIX sh; needs only sh, sed, diff, mktemp, awk,
+# timeout (all present in the BusyBox test stage).
 #
 # Run locally from the repo root:   sh tests/render-test.sh
 # Regenerate fixtures after an intended change:  sh tests/render-test.sh --record
@@ -302,11 +303,11 @@ check_fail recipients-slash-leading-regex 2 \
   RELAY_HOST=smtp.example.com \
   "RECIPIENT_RESTRICTIONS=///"
 
-# Universal-match (allow-all) regexp guard: a pattern that matches BOTH of
-# the two fixed impossible probe addresses matches every recipient, so the
-# rendered rule would allow all mail — fatal exit 2. The empty-alternation
-# typo class (trailing, leading, doubled |, empty group) and the broad
-# spellings (/./, /@/, /.+/, /.*/) must all trip it.
+# Universal-match safety heuristic: a construct matching BOTH fixed
+# impossible probes is treated as possibly allow-all, so rendering is
+# refused with exit 2. The empty-alternation typo class (trailing,
+# leading, doubled |, empty group) and the broad spellings (/./, /@/,
+# /.+/, /.*/) must all trip it.
 check_fail recipients-universal-trailing-alternation 2 \
   RELAY_HOST=smtp.example.com \
   "RECIPIENT_RESTRICTIONS=/alerts@example\.com|/"
@@ -339,9 +340,9 @@ check_fail recipients-universal-dot-star 2 \
   RELAY_HOST=smtp.example.com \
   "RECIPIENT_RESTRICTIONS=/.*/"
 
-# Case-only-universal: Postfix regexp tables match case-insensitively by
-# default (regexp_table(5)), so /[A-Z]/ matches every recipient containing
-# a letter; the probes run grep -i to mirror that.
+# Default-insensitive /[A-Z]/ matches both lowercase safety probes and is
+# therefore rejected by the possibly-allow-all heuristic; the probes run
+# grep -i to mirror Postfix.
 check_fail recipients-universal-case-insensitive 2 \
   RELAY_HOST=smtp.example.com \
   "RECIPIENT_RESTRICTIONS=/[A-Z]/"
@@ -668,6 +669,44 @@ check_relay_host_warn relay-host-bracketed-hostport '[smtp.example.com:587]' 1
 
 # A well-formed bracketed IPv6 literal must stay warning-free.
 check_relay_host_warn relay-host-bracketed-ipv6 '[2001:db8::1]' 0
+
+# --- parse_regexp_construct linearity regression ---------------------------
+# The structured parser must stay linear in the token length: the earlier
+# per-character shell loop copied both the shrinking suffix and the growing
+# prefix on every character, so a 5 KiB pattern held pre-start validation
+# for ~100s in the built image (RECIPIENT_RESTRICTIONS has no length
+# bound). Build an 8 KiB literal pattern, parse it under a hard 5s
+# deadline, and assert the extracted first half is byte-identical.
+check_parse_linear() {
+  _name=$1
+  _pat=''
+  _i=0
+  while [ "$_i" -lt 512 ]; do
+    _pat="${_pat}abcdefghijklmnop"
+    _i=$((_i + 1))
+  done
+  if _got=$(
+    timeout 5 sh -c '
+      . "$1/recipient-filter.sh"
+      parse_regexp_construct "/$2/" || exit 1
+      printf %s "$_rx_p1"
+    ' parse-probe "$ENTRYPOINT_DIR" "$_pat"
+  ); then
+    :
+  else
+    printf 'FAIL %s: parser failed or exceeded 5s on an 8 KiB pattern\n' "$_name" >&2
+    fail=$((fail + 1))
+    return
+  fi
+  if [ "$_got" = "$_pat" ]; then
+    pass=$((pass + 1))
+  else
+    printf 'FAIL %s: _rx_p1 is not byte-identical to the 8 KiB input pattern\n' "$_name" >&2
+    fail=$((fail + 1))
+  fi
+}
+
+check_parse_linear parse-8kib-linear
 
 # --- Summary --------------------------------------------------------------
 printf 'render-test: %d passed, %d failed\n' "$pass" "$fail"

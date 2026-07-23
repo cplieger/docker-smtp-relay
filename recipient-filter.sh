@@ -38,82 +38,81 @@ emit_rcpt_line() {
   fi
 }
 
-# _rx_scan_pattern TEXT — consume one regexp pattern half from TEXT up to
-# its closing unescaped / delimiter, mirroring dict_regexp's scan: a
-# backslash escapes the next character (so \/ stays inside the pattern,
-# exactly the escape escape_postfix_regex produces for the literal arms).
-# Sets _rx_pat to the pattern (escapes preserved verbatim — that is what
-# Postfix hands to regcomp and what the grep probes must therefore see) and
-# _rx_rest to the text after the delimiter. Returns 1 when no unescaped
-# closing delimiter exists (Postfix skips such a line at map load with a
-# 'no closing regexp delimiter' warning — probed in-image with postmap -q
-# on the pinned 3.11.5, 2026-07).
-_rx_scan_pattern() {
-  _rx_pat=''
-  _rx_rest=$1
-  while [ -n "$_rx_rest" ]; do
-    _rx_c=${_rx_rest%"${_rx_rest#?}"}
-    _rx_rest=${_rx_rest#?}
-    case "$_rx_c" in
-      \\)
-        _rx_pat="${_rx_pat}\\${_rx_rest%"${_rx_rest#?}"}"
-        _rx_rest=${_rx_rest#?}
-        ;;
-      /) return 0 ;;
-      *) _rx_pat="$_rx_pat$_rx_c" ;;
-    esac
-  done
-  return 1
-}
-
 # parse_regexp_construct TOKEN — structure-parse a leading-/ token into the
 # regexp_table(5) forms this image supports:
 #   /P/                        plain pattern
 #   /P/FLAGS                   flag-suffixed (FLAGS: one or more of i m x)
 #   /P1/[FLAGS]!/P2/[FLAGS]    dual-pattern: matches P1 AND NOT P2
 # Sets _rx_p1/_rx_f1 (first half + flags), _rx_dual (0|1), _rx_p2/_rx_f2.
-# Returns 1 on any other leading-/ structure: no closing delimiter,
+# Returns 1 on any other leading-/ structure: no closing delimiter (Postfix
+# skips such a line at map load with a 'no closing regexp delimiter'
+# warning — probed in-image with postmap -q on the pinned 3.11.5, 2026-07),
 # dangling !, a second half not /-delimited, more than one ! separator, or
 # a flag char outside the verified set — the caller warns and suppresses.
-# The flag set was verified in-image against the pinned Postfix 3.11.5
-# (postmap -q probes on throwaway regexp maps, 2026-07): i, m, and x all
-# load and match; any other char makes postmap warn 'unknown regexp option
-# "<c>": skipping this rule' and drop that line while the rest of the map
-# still loads, so an unknown-flag token is mirrored as unparseable
-# structure (warn + ineffective), never emitted and never fatal.
+# Pattern scanning mirrors dict_regexp: each half ends at its first
+# UNESCAPED / delimiter, a backslash escapes the next character (so \/
+# stays inside the pattern, exactly the escape escape_postfix_regex
+# produces for the literal arms), and escapes are preserved verbatim —
+# that is what Postfix hands to regcomp and what the grep probes must
+# therefore see. The flag set was verified in-image against the pinned
+# Postfix 3.11.5 (postmap -q probes on throwaway regexp maps, 2026-07):
+# i, m, and x all load and match; any other char makes postmap warn
+# 'unknown regexp option "<c>": skipping this rule' and drop that line
+# while the rest of the map still loads, so an unknown-flag token is
+# mirrored as unparseable structure (warn + ineffective), never emitted
+# and never fatal.
+# The scan is ONE linear awk pass, not a per-character shell loop: the
+# shell spelling copied both the shrinking suffix and the growing prefix
+# on every character, making token parsing quadratic — and with no length
+# bound on RECIPIENT_RESTRICTIONS, a 5 KiB pattern held PID 1 in pre-start
+# validation for ~100s in the built Alpine image. The single-line pipe and
+# the heredoc read-back are safe because emit_recipient_rule already
+# rejected any whitespace-bearing token fatally, so TOKEN can never
+# contain a newline.
 parse_regexp_construct() {
+  _rx_fields=$(
+    printf '%s\n' "$1" | awk '
+      function add(c) { if (state == "p1") p1 = p1 c; else p2 = p2 c }
+      {
+        if (substr($0, 1, 1) != "/") exit 1
+        state = "p1"; dual = closed1 = closed2 = 0
+        for (i = 2; i <= length($0); i++) {
+          c = substr($0, i, 1)
+          if (state == "p1" || state == "p2") {
+            if (c == "\\") {
+              if (i == length($0)) exit 1
+              add(c substr($0, ++i, 1))
+            } else if (c == "/") {
+              if (state == "p1") { state = "f1"; closed1 = 1 }
+              else { state = "f2"; closed2 = 1 }
+            } else add(c)
+          } else if (state == "f1" && c == "!") {
+            if (substr($0, i + 1, 1) != "/") exit 1
+            dual = 1; state = "p2"; i++
+          } else if (state == "f1") f1 = f1 c
+          else f2 = f2 c
+        }
+        if (!closed1 || (dual && !closed2) || f1 ~ /[^imx]/ || f2 ~ /[^imx]/) exit 1
+        print "dual:" dual; print "p1:" p1; print "f1:" f1
+        print "p2:" p2; print "f2:" f2
+      }'
+  ) || return 1
   _rx_dual=0
+  _rx_p1=''
+  _rx_f1=''
   _rx_p2=''
   _rx_f2=''
-  _rx_scan_pattern "${1#/}" || return 1
-  _rx_p1=$_rx_pat
-  case "$_rx_rest" in
-    *!*)
-      # The first ! after P1's closing delimiter separates the two halves;
-      # a ! inside either pattern is protected by its delimiters and never
-      # reaches this split.
-      _rx_f1=${_rx_rest%%!*}
-      _rx_tail=${_rx_rest#*!}
-      case "$_rx_tail" in
-        /*) ;;
-        *) return 1 ;; # dangling ! / second half not /-delimited
-      esac
-      _rx_scan_pattern "${_rx_tail#/}" || return 1
-      _rx_p2=$_rx_pat
-      _rx_f2=$_rx_rest
-      case "$_rx_f2" in
-        *!*) return 1 ;; # more than one ! separator
-      esac
-      _rx_dual=1
-      ;;
-    *) _rx_f1=$_rx_rest ;;
-  esac
-  case "$_rx_f1" in
-    *[!imx]*) return 1 ;;
-  esac
-  case "$_rx_f2" in
-    *[!imx]*) return 1 ;;
-  esac
+  while IFS= read -r _rx_field; do
+    case "$_rx_field" in
+      dual:*) _rx_dual=${_rx_field#dual:} ;;
+      p1:*) _rx_p1=${_rx_field#p1:} ;;
+      f1:*) _rx_f1=${_rx_field#f1:} ;;
+      p2:*) _rx_p2=${_rx_field#p2:} ;;
+      f2:*) _rx_f2=${_rx_field#f2:} ;;
+    esac
+  done <<EOF
+$_rx_fields
+EOF
 }
 
 # half_flag_state FLAGS — fold one half's flag string into its effective
@@ -202,6 +201,99 @@ regexp_construct_matches() {
   return 0
 }
 
+# set_regexp_flag_states — fold the parsed construct's flag strings into
+# per-half effective matcher states (see half_flag_state). Sets
+# _rx_ext1/_rx_icase1 from _rx_f1 and defaults _rx_ext2/_rx_icase2 to the
+# ERE/case-insensitive start state, folding _rx_f2 only for the dual form.
+set_regexp_flag_states() {
+  half_flag_state "$_rx_f1"
+  _rx_ext1=$_hf_ext
+  _rx_icase1=$_hf_icase
+  _rx_ext2=1
+  _rx_icase2=1
+  if [ "$_rx_dual" -eq 1 ]; then
+    half_flag_state "$_rx_f2"
+    _rx_ext2=$_hf_ext
+    _rx_icase2=$_hf_icase
+  fi
+}
+
+# classify_regexp_halves — compile-probe each parsed pattern half with its
+# flag-mirrored grep syntax (same warn + status 10 handling as always,
+# applied to each half; the round-1 all-malformed -> exit-2 semantics are
+# unchanged because status 10 keeps the token out of the effective count).
+# Sets _rcpt_status: 0 when every half compiles, 10 (ineffective) when
+# either half draws the compile warn.
+classify_regexp_halves() {
+  _rcpt_status=0
+  if ! regex_half_compiles "$_rx_p1" "$_rx_ext1"; then
+    printf 'level=warn msg="recipient restriction regex does not compile; Postfix skips an uncompilable rule at map load and matching recipients will be rejected" pattern="%s"\n' \
+      "$(sanitize_token "$_rx_p1")" >&2
+    _rcpt_status=10
+  fi
+  if [ "$_rx_dual" -eq 1 ] && ! regex_half_compiles "$_rx_p2" "$_rx_ext2"; then
+    printf 'level=warn msg="recipient restriction regex does not compile; Postfix skips an uncompilable rule at map load and matching recipients will be rejected" pattern="%s"\n' \
+      "$(sanitize_token "$_rx_p2")" >&2
+    _rcpt_status=10
+  fi
+}
+
+# reject_universal_construct ENTRY — universal-match (possibly-allow-all)
+# guard, applied to the FULL CONSTRUCT uniformly: single form — the
+# construct matches a probe iff P matches it; dual form — iff P1 matches
+# AND NOT P2 matches (exactly how Postfix evaluates the emitted line).
+# Fatal iff the construct matches BOTH probes — same rule, same message,
+# any spelling. The probes are two FIXED, dissimilar,
+# syntactically-valid-but-impossible addresses on reserved TLDs (RFC
+# 2606/6761). This is an honest HEURISTIC: matching both probes is treated
+# as possibly allow-all, not proof of it. It closes every universal
+# pattern — the empty-alternation typo class (/P|/, /|P/, /P||Q/, /()/),
+# nullable-quantifier spellings ((foo)?, a{0,3}, ^|x), broad spellings
+# (/./, /@/, /.+/, /.*/), and the dual near-allow-all /.*/!/^noreply@/
+# (universal P1, narrow except: both probes match — the feature is an
+# allowlist, so near-allow-all must be spelled as the empty var) — while
+# the supported narrowing idiom /.*@example\.com/!/^noreply@/ matches
+# neither probe and passes. Deliberately does NOT flag
+# broad-but-not-universal patterns (e.g. /@e/, TLD unions) — operator
+# judgment, mechanically undecidable. Over-fatal FP classes, fail-closed
+# and loud: (a) patterns keyed to the probe structure (e.g. /\.invalid/
+# beside a dead anchored-empty branch, or a nonce-structure-matching
+# branch) — no plausible authoring path in a recipient allowlist; (b)
+# shared-character members (/-/, /e/ — both probes contain hyphens and
+# common letters). The split remediation in the fatal message resolves the
+# plausible members of (b): /\.invalid$/ and /\.test$/ as SEPARATE entries
+# each match one probe only and pass. Never-match patterns (/^$/,
+# /^$|^addr$/) correctly PASS (not this guard's class; they boot as
+# reject-heavy configs, the fail-closed direction). The probes mirror each
+# half's EFFECTIVE flags via regex_half_matches (i/x toggle parity — the
+# earlier blanket -i covered only the default state, when a flags suffix
+# could not reach this arm), so a case-only-universal /[A-Z]/ still flags
+# while the case-SENSITIVE /[A-Z]/i correctly passes. The guard only runs
+# when every half compiled (an uncompilable half means Postfix skips the
+# whole line at map load — already warned, status 10 — so match probes
+# would be meaningless).
+# Tier 1 per validate.sh's validation policy ("any input that silently
+# turns a configured restriction into allow-all" — always fatal), the
+# same posture as the empty-pattern arms in emit_regexp_recipient_rule;
+# recorded in that policy header as explicit closed-set grants (2026-07
+# round-3 judgement + user batch-closure approval; construct-level
+# semantics, flags, and dual-pattern support are the 2026-07 round-4
+# grant). Returns 0 when the construct passes (status nonzero or either
+# probe misses); otherwise emits the fatal error, removes _rcpt_tmp, and
+# exits 2.
+reject_universal_construct() {
+  _rcpt_probe_a='q7probe@nonce-a.invalid'
+  _rcpt_probe_b='k2xrf@check-b.test'
+  if [ "$_rcpt_status" -eq 0 ] \
+    && regexp_construct_matches "$_rcpt_probe_a" \
+    && regexp_construct_matches "$_rcpt_probe_b"; then
+    printf 'level=error msg="recipient restriction regexp matches both universal-match safety probes and is treated as possibly allow-all; refusing to render it (split a narrow alternation into separate RECIPIENT_RESTRICTIONS entries; leave RECIPIENT_RESTRICTIONS empty only if allow-all is intended)" pattern="%s"\n' \
+      "$(sanitize_token "$1")" >&2
+    rm -f "$_rcpt_tmp"
+    exit 2
+  fi
+}
+
 # emit_regexp_recipient_rule ENTRY — render one leading-/ regexp-family
 # token. Structure-parses the token into the supported regexp_table(5)
 # forms (plain, flag-suffixed, dual-pattern), compile-probes each pattern
@@ -218,7 +310,6 @@ regexp_construct_matches() {
 # unparseable-structure arm (which REPLACED the earlier unescaped-delimiter
 # heuristic) also returns 10 but does NOT emit; see its comment.
 emit_regexp_recipient_rule() {
-  _rcpt_status=0
   # Postfix's dict_regexp ends the pattern at the FIRST unescaped /, so any
   # entry beginning with // (//, ///, //foo/) has an EMPTY effective first
   # pattern whatever follows. An empty pattern compiles as
@@ -262,80 +353,12 @@ emit_regexp_recipient_rule() {
     rm -f "$_rcpt_tmp"
     exit 2
   fi
-  # Effective flag states, then per-half compile probes (same warn + status
-  # 10 handling as always, applied to each half; the round-1
-  # all-malformed -> exit-2 semantics are unchanged because status 10 keeps
-  # the token out of the effective count).
-  half_flag_state "$_rx_f1"
-  _rx_ext1=$_hf_ext
-  _rx_icase1=$_hf_icase
-  _rx_ext2=1
-  _rx_icase2=1
-  if [ "$_rx_dual" -eq 1 ]; then
-    half_flag_state "$_rx_f2"
-    _rx_ext2=$_hf_ext
-    _rx_icase2=$_hf_icase
-  fi
-  if ! regex_half_compiles "$_rx_p1" "$_rx_ext1"; then
-    printf 'level=warn msg="recipient restriction regex does not compile; Postfix skips an uncompilable rule at map load and matching recipients will be rejected" pattern="%s"\n' \
-      "$(sanitize_token "$_rx_p1")" >&2
-    _rcpt_status=10
-  fi
-  if [ "$_rx_dual" -eq 1 ] && ! regex_half_compiles "$_rx_p2" "$_rx_ext2"; then
-    printf 'level=warn msg="recipient restriction regex does not compile; Postfix skips an uncompilable rule at map load and matching recipients will be rejected" pattern="%s"\n' \
-      "$(sanitize_token "$_rx_p2")" >&2
-    _rcpt_status=10
-  fi
-  # Universal-match (possibly-allow-all) guard, applied to the FULL
-  # CONSTRUCT uniformly: single form — the construct matches a probe iff P
-  # matches it; dual form — iff P1 matches AND NOT P2 matches (exactly how
-  # Postfix evaluates the emitted line). Fatal iff the construct matches
-  # BOTH probes — same rule, same message, any spelling. The probes are two
-  # FIXED, dissimilar, syntactically-valid-but-impossible addresses on
-  # reserved TLDs (RFC 2606/6761). This is an honest HEURISTIC: matching
-  # both probes is treated as possibly allow-all, not proof of it. It
-  # closes every universal pattern — the empty-alternation typo class
-  # (/P|/, /|P/, /P||Q/, /()/), nullable-quantifier spellings ((foo)?,
-  # a{0,3}, ^|x), broad spellings (/./, /@/, /.+/, /.*/), and the dual
-  # near-allow-all /.*/!/^noreply@/ (universal P1, narrow except: both
-  # probes match — the feature is an allowlist, so near-allow-all must be
-  # spelled as the empty var) — while the supported narrowing idiom
-  # /.*@example\.com/!/^noreply@/ matches neither probe and passes.
-  # Deliberately does NOT flag broad-but-not-universal patterns (e.g.
-  # /@e/, TLD unions) — operator judgment, mechanically undecidable.
-  # Over-fatal FP classes, fail-closed and loud: (a) patterns keyed to the
-  # probe structure (e.g. /\.invalid/ beside a dead anchored-empty branch,
-  # or a nonce-structure-matching branch) — no plausible authoring path in
-  # a recipient allowlist; (b) shared-character members (/-/, /e/ — both
-  # probes contain hyphens and common letters). The split remediation in
-  # the fatal message resolves the plausible members of (b): /\.invalid$/
-  # and /\.test$/ as SEPARATE entries each match one probe only and pass.
-  # Never-match patterns (/^$/, /^$|^addr$/) correctly PASS (not this
-  # guard's class; they boot as reject-heavy configs, the fail-closed
-  # direction). The probes mirror each half's EFFECTIVE flags via
-  # regex_half_matches (i/x toggle parity — the earlier blanket -i covered
-  # only the default state, when a flags suffix could not reach this arm),
-  # so a case-only-universal /[A-Z]/ still flags while the case-SENSITIVE
-  # /[A-Z]/i correctly passes. The guard only runs when every half
-  # compiled (an uncompilable half means Postfix skips the whole line at
-  # map load — already warned, status 10 — so match probes would be
-  # meaningless).
-  # Tier 1 per validate.sh's validation policy ("any input that silently
-  # turns a configured restriction into allow-all" — always fatal), the
-  # same posture as the empty-pattern arms above; recorded in that policy
-  # header as explicit closed-set grants (2026-07 round-3 judgement +
-  # user batch-closure approval; construct-level semantics, flags, and
-  # dual-pattern support are the 2026-07 round-4 grant).
-  _rcpt_probe_a='q7probe@nonce-a.invalid'
-  _rcpt_probe_b='k2xrf@check-b.test'
-  if [ "$_rcpt_status" -eq 0 ] \
-    && regexp_construct_matches "$_rcpt_probe_a" \
-    && regexp_construct_matches "$_rcpt_probe_b"; then
-    printf 'level=error msg="recipient restriction regexp matches both universal-match safety probes and is treated as possibly allow-all; refusing to render it (split a narrow alternation into separate RECIPIENT_RESTRICTIONS entries; leave RECIPIENT_RESTRICTIONS empty only if allow-all is intended)" pattern="%s"\n' \
-      "$(sanitize_token "$1")" >&2
-    rm -f "$_rcpt_tmp"
-    exit 2
-  fi
+  # Effective flag states, per-half compile probes, then the construct-level
+  # universal-match (possibly-allow-all) guard — see each helper above for
+  # the full semantics and policy grants.
+  set_regexp_flag_states
+  classify_regexp_halves
+  reject_universal_construct "$1"
   emit_rcpt_line "$1 OK"
   return "$_rcpt_status"
 }
