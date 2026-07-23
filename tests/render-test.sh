@@ -704,6 +704,7 @@ check_parse_linear() {
     _i=$((_i + 1))
   done
   if _got=$(
+    # shellcheck disable=SC2016  # deliberate: $1/$2/$_rx_p1 belong to the INNER sh (positional params + sourced parser variable), not this shell
     timeout 5 sh -c '
       . "$1/recipient-filter.sh"
       parse_regexp_construct "/$2/" || exit 1

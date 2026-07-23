@@ -99,14 +99,16 @@ COPY postfix-release.gpg /usr/local/share/postfix-release.gpg
 # mirror/network failure keeps its diagnostic in the BuildKit log (DL3047
 # wants -q/-nv/--progress back, but busybox wget has no -nv/--progress and
 # -q is what silenced fetch failures; BuildKit hides the output on success).
+# BusyBox wget accepts but ignores --tries (no retry support), so the
+# primary/fallback mirror pair IS the retry story: one attempt per mirror.
 # hadolint ignore=SC2016,DL3047
-RUN { wget --tries=3 --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz" \
+RUN { wget --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz" \
         "https://high5.nl/mirrors/postfix-release/official/postfix-${POSTFIX_VERSION#v}.tar.gz" \
-      || wget --tries=3 --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz" \
+      || wget --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz" \
         "http://ftp.porcupine.org/mirrors/postfix-release/official/postfix-${POSTFIX_VERSION#v}.tar.gz"; } \
-    && { wget --tries=3 --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz.gpg2" \
+    && { wget --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz.gpg2" \
         "https://high5.nl/mirrors/postfix-release/official/postfix-${POSTFIX_VERSION#v}.tar.gz.gpg2" \
-      || wget --tries=3 --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz.gpg2" \
+      || wget --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz.gpg2" \
         "http://ftp.porcupine.org/mirrors/postfix-release/official/postfix-${POSTFIX_VERSION#v}.tar.gz.gpg2"; } \
     && gpgv --keyring /usr/local/share/postfix-release.gpg \
         "postfix-${POSTFIX_VERSION#v}.tar.gz.gpg2" "postfix-${POSTFIX_VERSION#v}.tar.gz" \

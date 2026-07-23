@@ -224,17 +224,20 @@ set_regexp_flag_states() {
 # unchanged because status 10 keeps the token out of the effective count).
 # Sets _rcpt_status: 0 when every half compiles, 10 (ineffective) when
 # either half draws the compile warn.
+# warn_uncompilable_half PATTERN -- single source of the compile-warn log
+# contract (the wording is Loki-queried; two hand-kept copies can drift)
+# plus the shared ineffective-status bookkeeping.
+warn_uncompilable_half() {
+  printf 'level=warn msg="recipient restriction regex does not compile; Postfix skips an uncompilable rule at map load and matching recipients will be rejected" pattern="%s"\n' \
+    "$(sanitize_token "$1")" >&2
+  _rcpt_status=10
+}
+
 classify_regexp_halves() {
   _rcpt_status=0
-  if ! regex_half_compiles "$_rx_p1" "$_rx_ext1"; then
-    printf 'level=warn msg="recipient restriction regex does not compile; Postfix skips an uncompilable rule at map load and matching recipients will be rejected" pattern="%s"\n' \
-      "$(sanitize_token "$_rx_p1")" >&2
-    _rcpt_status=10
-  fi
-  if [ "$_rx_dual" -eq 1 ] && ! regex_half_compiles "$_rx_p2" "$_rx_ext2"; then
-    printf 'level=warn msg="recipient restriction regex does not compile; Postfix skips an uncompilable rule at map load and matching recipients will be rejected" pattern="%s"\n' \
-      "$(sanitize_token "$_rx_p2")" >&2
-    _rcpt_status=10
+  regex_half_compiles "$_rx_p1" "$_rx_ext1" || warn_uncompilable_half "$_rx_p1"
+  if [ "$_rx_dual" -eq 1 ]; then
+    regex_half_compiles "$_rx_p2" "$_rx_ext2" || warn_uncompilable_half "$_rx_p2"
   fi
 }
 
@@ -514,5 +517,7 @@ build_recipient_filter() {
     # that would confuse operators reading Loki.
     printf 'level=info msg="recipient filtering configured" rules=%d\n' \
       "$_rule_count" >&2
+  else
+    printf 'level=info msg="recipient filtering disabled; RECIPIENT_RESTRICTIONS is empty (all recipients from accepted networks are relayed)"\n' >&2
   fi
 }
