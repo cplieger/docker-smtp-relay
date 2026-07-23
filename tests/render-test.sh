@@ -442,6 +442,14 @@ check_log recipients-flags-basic-syntax 2 'does not compile' \
   RELAY_HOST=smtp.example.com \
   "RECIPIENT_RESTRICTIONS=/\(/x"
 
+# Bare ( is a literal paren under BRE (compiles; matches neither guard
+# probe) but an unmatched group opener under ERE -- flag-distinguishing
+# coverage of regex_half_compiles' BRE compile-SUCCESS arm and its
+# ^probe$\| backstop, which the failing /\(/x case above never reaches.
+check_log recipients-flags-basic-syntax-valid 0 'rules=1' \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=/(/x"
+
 # Unknown flag char: postmap (3.11.5) warns 'unknown regexp option' and
 # skips the rule while the rest of the map loads; mirrored as unparseable
 # structure — warn + suppressed + ineffective, so an all-such list trips
