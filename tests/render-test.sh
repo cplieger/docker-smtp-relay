@@ -103,6 +103,39 @@ check_fail() {
   rm -rf "$_tmp"
 }
 
+# check_log NAME EXPECTED_CODE LOG_SNIPPET VAR=VAL...
+# Render must exit EXPECTED_CODE AND its stderr must contain LOG_SNIPPET
+# (fixed string). check_ok/check_fail discard stderr, so structured
+# level=error/warn log contracts are pinned through this helper instead.
+check_log() {
+  _name=$1
+  _want=$2
+  _snippet=$3
+  shift 3
+  _tmp=$(mktemp -d)
+  _stderr_file=$(mktemp)
+  if env -i PATH="$PATH" CONF_DIR="$_tmp" "$@" sh "$ENTRYPOINT" render >/dev/null 2>"$_stderr_file"; then
+    _rc=0
+  else
+    _rc=$?
+  fi
+  _stderr=$(cat "$_stderr_file")
+  rm -f "$_stderr_file"
+  rm -rf "$_tmp"
+  if [ "$_rc" != "$_want" ]; then
+    printf 'FAIL %s: render exited %d, expected %d (stderr: %s)\n' "$_name" "$_rc" "$_want" "$_stderr" >&2
+    fail=$((fail + 1))
+    return
+  fi
+  case "$_stderr" in
+    *"$_snippet"*) pass=$((pass + 1)) ;;
+    *)
+      printf 'FAIL %s: stderr missing "%s" (stderr: %s)\n' "$_name" "$_snippet" "$_stderr" >&2
+      fail=$((fail + 1))
+      ;;
+  esac
+}
+
 # --- Valid configurations -------------------------------------------------
 check_ok minimal \
   RELAY_HOST=email-smtp.us-east-1.amazonaws.com
@@ -130,6 +163,24 @@ check_ok recipients-mixed-malformed \
 check_ok recipients-mixed-never-match \
   RELAY_HOST=smtp.example.com \
   "RECIPIENT_RESTRICTIONS=user@example.com .example.com"
+
+# Mixed valid + deterministic never-match ADDRESS shape (dot right after
+# the @): same contract as the domain shape above — the dead entry is
+# warned, still rendered (the map carries both lines + /.*/ REJECT), and
+# excluded from the effective-rule count (2026-07 round-3 decision).
+check_ok recipients-mixed-never-match-address \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=user@.example.com valid@example.com"
+
+# The dead address entry must be excluded from the effective count
+# (rules=1, not 2) and its never-match warn must be present.
+check_log recipients-mixed-never-match-address-rules 0 'rules=1' \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=user@.example.com valid@example.com"
+
+check_log recipients-mixed-never-match-address-warn 0 'address domain starts with a dot' \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=user@.example.com valid@example.com"
 
 # Valid ERE with a backreference: the alternation compile probe must prepend
 # its guaranteed-match alternative rather than wrap the pattern in a capture
@@ -251,6 +302,62 @@ check_fail recipients-slash-leading-regex 2 \
   RELAY_HOST=smtp.example.com \
   "RECIPIENT_RESTRICTIONS=///"
 
+# Universal-match (allow-all) regexp guard: a pattern that matches BOTH of
+# the two fixed impossible probe addresses matches every recipient, so the
+# rendered rule would allow all mail — fatal exit 2. The empty-alternation
+# typo class (trailing, leading, doubled |, empty group) and the broad
+# spellings (/./, /@/, /.+/, /.*/) must all trip it.
+check_fail recipients-universal-trailing-alternation 2 \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=/alerts@example\.com|/"
+
+check_fail recipients-universal-leading-alternation 2 \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=/|alerts@example\.com/"
+
+check_fail recipients-universal-doubled-alternation 2 \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=/a||b/"
+
+check_fail recipients-universal-empty-group 2 \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=/()/"
+
+check_fail recipients-universal-dot 2 \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=/./"
+
+check_fail recipients-universal-at 2 \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=/@/"
+
+check_fail recipients-universal-dot-plus 2 \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=/.+/"
+
+check_fail recipients-universal-dot-star 2 \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=/.*/"
+
+# The structured error line for the universal-pattern rejection is a log
+# contract (names the class and the remediation); pin it for one case.
+check_log recipients-universal-error-log 2 'matches every recipient' \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=/.*/"
+
+# MUST-PASS controls for the universal guard: a dead anchored-empty branch
+# beside a real branch is restrictive (never-match patterns are not this
+# guard's class), and a working optional-suffix group has an empty
+# alternation branch that is NOT universal. Both must boot exit 0 with the
+# rule emitted and counted.
+check_ok recipients-anchored-empty-branch \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=/^$|^alerts@example\.com$/"
+
+check_ok recipients-optional-suffix-group \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=/alerts(|-dev)@example\.com/"
+
 # Every entry malformed (the ERE does not compile): zero EFFECTIVE rules must
 # trip the zero-rules guard instead of rendering a map whose only live line
 # is /.*/ REJECT.
@@ -280,6 +387,20 @@ check_fail recipients-all-never-match 2 \
 check_fail recipients-all-never-match-slash 2 \
   RELAY_HOST=smtp.example.com \
   RECIPIENT_RESTRICTIONS=foo/bar
+
+# Every entry a deterministic never-match ADDRESS shape (dot-after-@,
+# empty local part, empty domain): zero EFFECTIVE rules must trip the
+# zero-rules guard, same as the domain shapes (2026-07 round-3 decision).
+check_fail recipients-all-never-match-address 2 \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=user@.example.com @example.com user@"
+
+# A bare @ is both empty-local and empty-domain; the classification order
+# is pinned to empty-local. The all-@ list trips the zero-rules guard AND
+# the warn text must carry the empty-local classification.
+check_log recipients-never-match-bare-at 2 'empty local part' \
+  RELAY_HOST=smtp.example.com \
+  RECIPIENT_RESTRICTIONS=@
 
 check_fail bad-tls-level 2 \
   RELAY_HOST=smtp.example.com \

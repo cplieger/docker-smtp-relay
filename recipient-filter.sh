@@ -84,6 +84,38 @@ emit_regexp_recipient_rule() {
       _rcpt_status=10
       ;;
   esac
+  # Universal-match (allow-all) guard: a pattern matching two unrelated
+  # impossible addresses cannot be a meaningful restriction — it matches
+  # every recipient, so the rendered rule would allow ALL mail before the
+  # /.*/ REJECT terminator. The probes are two FIXED, dissimilar,
+  # syntactically-valid-but-impossible addresses on reserved TLDs
+  # (RFC 2606/6761); the pattern already passed the compile probes above,
+  # so these are pure match tests (an uncompilable pattern exits >= 2 on
+  # both greps and can never flag). Fatal iff the pattern matches BOTH.
+  # Closes every universal pattern: the empty-alternation typo class
+  # (/P|/, /|P/, /P||Q/, /()/), nullable-quantifier spellings ((foo)?,
+  # a{0,3}, ^|x), and broad spellings (/./, /@/, /.+/, /.*/). Deliberately
+  # does NOT flag broad-but-not-universal patterns (e.g. /@e/, TLD
+  # unions) — operator judgment, mechanically undecidable. Over-fatal FP
+  # class: patterns keyed to the probe structure (e.g. /\.invalid/) — no
+  # plausible authoring path in a recipient allowlist; fail-closed and
+  # loud. Never-match patterns (/^$/, /^$|^addr$/) correctly PASS (not
+  # this guard's class; they boot as reject-heavy configs, the fail-closed
+  # direction). Pure ERE semantics — no Postfix-version dependence.
+  # Tier 1 per validate.sh's validation policy ("any input that silently
+  # turns a configured restriction into allow-all" — always fatal), the
+  # same posture as the // empty-pattern arm above; recorded in that
+  # policy header as a new explicit closed-set grant (2026-07 round-3
+  # judgement + user batch-closure approval).
+  _rcpt_probe_a='q7probe@nonce-a.invalid'
+  _rcpt_probe_b='k2xrf@check-b.test'
+  if printf '%s\n' "$_rcpt_probe_a" | grep -E -e "$_rcpt_pat" >/dev/null 2>&1 \
+    && printf '%s\n' "$_rcpt_probe_b" | grep -E -e "$_rcpt_pat" >/dev/null 2>&1; then
+    printf 'level=error msg="recipient restriction regex matches every recipient and the rendered rule would allow all mail; refusing to render an allow-all restriction (to allow all recipients, leave RECIPIENT_RESTRICTIONS empty)" pattern="%s"\n' \
+      "$(sanitize_token "$_rcpt_pat")" >&2
+    rm -f "$_rcpt_tmp"
+    exit 2
+  fi
   emit_rcpt_line "$1 OK"
   return "$_rcpt_status"
 }
@@ -93,15 +125,16 @@ emit_regexp_recipient_rule() {
 # emit_rcpt_line. Shares the _rcpt_tmp contract with build_recipient_filter:
 # fatal branches remove the temp file and exit 2. Returns 0 for an effective
 # rule; the regexp arm is its case arm's last command, so it propagates
-# emit_regexp_recipient_rule's ineffective status (10). The address arm ends
-# in emit_rcpt_line and keeps returning 0. The domain arm's two deterministic
-# never-match shapes (slash-bearing token, leading dot) warn, still emit the
+# emit_regexp_recipient_rule's ineffective status (10). The address arm's
+# three deterministic never-match shapes (empty local part, empty domain,
+# dot-after-@ — order-pinned so a bare @ classifies as empty-local) and the
+# domain arm's two (slash-bearing token, leading dot) warn, still emit the
 # rule line unchanged, and return 10 (ineffective) — same status-10 contract
 # as the regexp arms, so an all-never-match list trips the zero-effective-
 # rules guard while a mixed list still boots on its valid subset (2026-07
-# decision, extending the regexp-arm one: deterministic never-match domain
-# shapes are also excluded from the effective count by explicit user
-# decision; the warns themselves are unchanged shape hints, not load
+# decisions, extending the regexp-arm one: deterministic never-match domain
+# and address shapes are also excluded from the effective count by explicit
+# user decision; the warns themselves are unchanged shape hints, not load
 # failures — Postfix still loads these lines, it just never matches them).
 emit_recipient_rule() {
   case "$1" in
@@ -118,8 +151,43 @@ emit_recipient_rule() {
       emit_regexp_recipient_rule "$1"
       ;;
     *@*) # full address: anchor both ends
+      # Three deterministic never-match address shapes mirror the domain
+      # arm's mechanism below (warn, still emit the rule line unchanged,
+      # return 10 so the entry is excluded from the effective-rule count;
+      # 2026-07 round-3 decision). The token is split on its LAST @;
+      # classification order is PINNED — empty local part first, then
+      # empty domain, then dot-after-@ — so a bare @ (both empty)
+      # classifies as empty-local. The empty-local and empty-domain
+      # shapes were probed live on Postfix 3.11.5 (the pinned version)
+      # with strict_rfc821_envelopes = no: smtpd presents an empty local
+      # part only in quoted form, so the anchored rule never matches a
+      # recipient smtpd presents, and a domain-less recipient is rejected
+      # before the access-map lookup — re-probe on a Postfix major bump.
+      # The dot-after-@ shape needs no version caveat (DNS forbids an
+      # empty label, so no deliverable address contains @.).
+      _rcpt_status=0
+      _local="${1%@*}"
+      _domain="${1##*@}"
+      if [ -z "$_local" ]; then
+        printf 'level=warn msg="recipient restriction address has an empty local part; this anchored rule never matches a recipient smtpd presents" entry="%s"\n' \
+          "$(sanitize_token "$1")" >&2
+        _rcpt_status=10
+      elif [ -z "$_domain" ]; then
+        printf 'level=warn msg="recipient restriction address has an empty domain; Postfix rejects domain-less recipients before the access-map lookup, so this rule will never match any recipient" entry="%s"\n' \
+          "$(sanitize_token "$1")" >&2
+        _rcpt_status=10
+      else
+        case "$_domain" in
+          .*)
+            printf 'level=warn msg="recipient restriction address domain starts with a dot (no deliverable address contains @.); this rule will never match any recipient" entry="%s"\n' \
+              "$(sanitize_token "$1")" >&2
+            _rcpt_status=10
+            ;;
+        esac
+      fi
       _esc=$(escape_postfix_regex "$1")
       emit_rcpt_line "/^${_esc}\$/ OK"
+      return "$_rcpt_status"
       ;;
     *) # domain-only: anchor the @-suffix
       # A domain can never contain a slash, so a slash-bearing token here
@@ -176,10 +244,11 @@ build_recipient_filter() {
     # Refuse to proceed if a non-empty RECIPIENT_RESTRICTIONS parses to zero
     # EFFECTIVE rules: whitespace-only value (quoting bug, empty-var
     # expansion), every entry malformed (warned above; Postfix drops each
-    # at map-open), or every entry a deterministic never-match domain shape
-    # (warned above; Postfix loads the rule but no recipient can ever match
-    # it). Without this guard the map's only live line is `/.*/ REJECT`,
-    # Postfix rejects 100% of mail, and the healthcheck still reports green.
+    # at map-open), or every entry a deterministic never-match domain or
+    # address shape (warned above; Postfix loads the rule but no recipient
+    # can ever match it). Without this guard the map's only live line is
+    # `/.*/ REJECT`, Postfix rejects 100% of mail, and the healthcheck
+    # still reports green.
     if [ "$_rule_count" -eq 0 ]; then
       printf 'level=error msg="RECIPIENT_RESTRICTIONS is non-empty but parsed zero effective rules (whitespace only, or every entry malformed or never-matching?); refusing to reject all mail"\n' >&2
       rm -f "$_rcpt_tmp"
