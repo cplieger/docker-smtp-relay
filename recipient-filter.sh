@@ -101,7 +101,8 @@ emit_regexp_recipient_rule() {
   # plausible authoring path in a recipient allowlist; fail-closed and
   # loud. Never-match patterns (/^$/, /^$|^addr$/) correctly PASS (not
   # this guard's class; they boot as reject-heavy configs, the fail-closed
-  # direction). Pure ERE semantics — no Postfix-version dependence.
+  # direction). Pure ERE semantics plus the table's default
+  # case-insensitivity — no Postfix-version dependence.
   # Tier 1 per validate.sh's validation policy ("any input that silently
   # turns a configured restriction into allow-all" — always fatal), the
   # same posture as the // empty-pattern arm above; recorded in that
@@ -109,8 +110,12 @@ emit_regexp_recipient_rule() {
   # judgement + user batch-closure approval).
   _rcpt_probe_a='q7probe@nonce-a.invalid'
   _rcpt_probe_b='k2xrf@check-b.test'
-  if printf '%s\n' "$_rcpt_probe_a" | grep -E -e "$_rcpt_pat" >/dev/null 2>&1 \
-    && printf '%s\n' "$_rcpt_probe_b" | grep -E -e "$_rcpt_pat" >/dev/null 2>&1; then
+  # -i mirrors dict_regexp's default: regexp_table(5) patterns are
+  # case-insensitive unless a per-pattern flag toggles it (and a flags
+  # suffix never reaches this arm), so a case-only-universal pattern
+  # (/[A-Z]/) is probed the way Postfix will actually match it.
+  if printf '%s\n' "$_rcpt_probe_a" | grep -iE -e "$_rcpt_pat" >/dev/null 2>&1 \
+    && printf '%s\n' "$_rcpt_probe_b" | grep -iE -e "$_rcpt_pat" >/dev/null 2>&1; then
     printf 'level=error msg="recipient restriction regex matches every recipient and the rendered rule would allow all mail; refusing to render an allow-all restriction (to allow all recipients, leave RECIPIENT_RESTRICTIONS empty)" pattern="%s"\n' \
       "$(sanitize_token "$_rcpt_pat")" >&2
     rm -f "$_rcpt_tmp"

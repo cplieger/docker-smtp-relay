@@ -339,6 +339,13 @@ check_fail recipients-universal-dot-star 2 \
   RELAY_HOST=smtp.example.com \
   "RECIPIENT_RESTRICTIONS=/.*/"
 
+# Case-only-universal: Postfix regexp tables match case-insensitively by
+# default (regexp_table(5)), so /[A-Z]/ matches every recipient containing
+# a letter; the probes run grep -i to mirror that.
+check_fail recipients-universal-case-insensitive 2 \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=/[A-Z]/"
+
 # The structured error line for the universal-pattern rejection is a log
 # contract (names the class and the remediation); pin it for one case.
 check_log recipients-universal-error-log 2 'matches every recipient' \
