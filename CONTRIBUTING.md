@@ -8,11 +8,11 @@ configured entirely from a POSIX `sh` entrypoint.
 ## Architecture
 
 This is a relay-only Postfix MTA built on Alpine. There is no `main.cf`
-template — the entrypoint generates the whole config from environment
+template; the entrypoint generates the whole config from environment
 variables at container start, validating every input before Postfix
 runs. Three scripts are copied into `/usr/local/bin/` and run as a unit:
 
-- `entrypoint.sh` — the orchestrator (PID 1). Runs in one of two modes
+- `entrypoint.sh`: the orchestrator (PID 1). Runs in one of two modes
   (dispatched on `$1`): `run` (default) applies defaults, validates,
   configures SASL, renders the config, probes the upstream relay, then
   `exec postfix start-fg`; `render` does defaults + validation + config
@@ -22,17 +22,17 @@ runs. Three scripts are copied into `/usr/local/bin/` and run as a unit:
   decomposed into functions (`apply_defaults`, `validate_config`,
   `compute_sasl_state`, `render_main_cf`, `probe_upstream`, …) shared between
   the two modes.
-- `validate.sh` — pure validation helpers (`validate_no_newlines`,
+- `validate.sh`: pure validation helpers (`validate_no_newlines`,
   `validate_numeric`, `validate_no_metacharacters`, `validate_range`,
   `validate_no_open_relay`, `validate_relay_host_shape`, `validate_tls_level`,
   `validate_fingerprint_digest`, `validate_fingerprint_match`,
   `validate_sasl_*`). Sourced by the entrypoint; no side effects.
-- `recipient-filter.sh` — builds `/etc/postfix/recipient_access` and sets
+- `recipient-filter.sh`: builds `/etc/postfix/recipient_access` and sets
   `SMTPD_RECIPIENT_RESTRICTIONS` from `RECIPIENT_RESTRICTIONS`.
 
 Validation is data-driven: `_spec_table` in `entrypoint.sh` maps each
 env var to a comma-separated list of checks (`nl`, `num`, `meta`,
-`range=MIN:MAX`). Add a new validated variable by extending that table —
+`range=MIN:MAX`). Add a new validated variable by extending that table:
 the loop resolves each row's value indirectly from the named variable, so
 the name lives in exactly one place (no per-var `case` to keep in sync, and
 no hand-written `if` block). Field-specific checks that don't fit the table
@@ -50,7 +50,7 @@ shellcheck entrypoint.sh validate.sh recipient-filter.sh
 hadolint Dockerfile
 ```
 
-CI is centralized — `.github/workflows/*.yaml` call reusable workflows in
+CI is centralized: `.github/workflows/*.yaml` call reusable workflows in
 `cplieger/ci` and are marked `DO NOT EDIT`. Change CI behavior there, not
 here.
 
@@ -119,7 +119,7 @@ no second copy to keep in sync.
 - **`render` mode must stay side-effect-free.** `entrypoint.sh render` may
   only apply defaults, validate, and write the generated files under
   `CONF_DIR`. Don't add `postmap`, `postfix`, secret writes, or `nc` to the
-  shared render path — those belong to `run`-only functions so the golden
+  shared render path; those belong to `run`-only functions so the golden
   tests stay runnable without root or a Postfix install.
 - **Startup probe is fail-soft.** `probe_upstream` is a plain TCP check and
   must never block startup: a failure logs a warning and returns 0 so mail
@@ -141,5 +141,5 @@ changes so the approach can be discussed.
 By participating you agree to the
 [Code of Conduct](https://github.com/cplieger/.github/blob/main/CODE_OF_CONDUCT.md).
 Report vulnerabilities through the
-[security policy](https://github.com/cplieger/.github/blob/main/SECURITY.md) —
+[security policy](https://github.com/cplieger/.github/blob/main/SECURITY.md),
 never in a public issue.
