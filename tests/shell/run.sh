@@ -10,6 +10,24 @@
 # skipped the whole suite silently and still reported CI green). The bit is set
 # anyway, for anyone running it directly.
 #
+# WHAT THIS REPO'S SUITE COVERS. This file is repo-owned (lib.sh and
+# harness_test.sh beside it are synced from cplieger/ci), so the per-repo scope
+# rationale lives here.
+#
+# Not the image smoke test, and not
+# tests/render-test.sh: the shipped shell is THREE files — entrypoint.sh (PID 1,
+# modes run|render) plus the sourced validate.sh and recipient-filter.sh — and the
+# existing harnesses reach only part of it. tests/image-smoke.sh builds an image
+# and asserts it boots, so it never takes a failure branch at all.
+# tests/render-test.sh drives `entrypoint.sh render` across an env matrix, which
+# covers config generation but stops at two hard edges: render mode returns before
+# the whole run-mode half (the SASL secret write and its postmap, the upstream TCP
+# probe, the queue-depth telemetry, the startup timeout accounting), and a
+# process-level harness sees only ONE exit 2 for a validator that refuses on seven
+# distinct arms. These tests take the other side of both edges: the run-mode
+# helpers no render ever executes, and the individual refusal — its message, not
+# just its exit code — that a matrix collapses.
+#
 # Each *_test.sh is a separate process, so one test's stubs, traps and shell
 # options cannot leak into another's. All of them run even when an early one
 # fails: a boot path's tests are cheap, and a maintainer wants the whole picture
