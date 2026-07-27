@@ -1,27 +1,25 @@
 #!/usr/bin/env bash
-# Shared harness for the entrypoint.sh unit tests.
+# Shared harness for a repo's shell unit tests — CANONICAL COPY in cplieger/ci
+# (configs/shell/lib.sh), synced to each adopting repo's tests/shell/lib.sh
+# by scripts/classify-repos.py (a repo enrolls by committing a tests/shell/run.sh,
+# which is also what the shell-ci hook looks for). DO NOT edit the synced copy in
+# an app repo — change it here and let the sync land it.
 #
-# WHY THESE TESTS EXIST, and why they are neither the image smoke test nor
-# tests/render-test.sh: the shipped shell is THREE files — entrypoint.sh (PID 1,
-# modes run|render) plus the sourced validate.sh and recipient-filter.sh — and the
-# existing harnesses reach only part of it. tests/image-smoke.sh builds an image
-# and asserts it boots, so it never takes a failure branch at all.
-# tests/render-test.sh drives `entrypoint.sh render` across an env matrix, which
-# covers config generation but stops at two hard edges: render mode returns before
-# the whole run-mode half (the SASL secret write and its postmap, the upstream TCP
-# probe, the queue-depth telemetry, the startup timeout accounting), and a
-# process-level harness sees only ONE exit 2 for a validator that refuses on seven
-# distinct arms. These tests take the other side of both edges: the run-mode
-# helpers no render ever executes, and the individual refusal — its message, not
-# just its exit code — that a matrix collapses.
+# WHY THESE SUITES EXIST, generically: an image smoke test proves the assembled
+# image boots, so it can only ever walk the paths a HEALTHY container takes. The
+# branches that matter most are the ones that fail CLOSED — a refusal, a guard, a
+# fallback — and a healthy image never reaches them. These suites assert what
+# happens when it should NOT work. Each repo's own rationale (which of its shell
+# files are covered, and what its existing tests already own) belongs in its
+# repo-owned tests/shell/run.sh header, not here.
 #
-# HOW: each test extracts one function verbatim from the shipped entrypoint.sh
-# and runs it against temp directories, with the few external commands it touches
-# stubbed. Nothing is reimplemented here — an assertion that passed against a
-# paraphrase would prove nothing about what ships. These functions take their
-# inputs from the environment rather than hardcoding paths, which is what makes
-# this possible without a container, a Postfix install or a writable /etc/postfix;
-# ENTRYPOINT is reassigned per extraction to reach the two sourced helper files.
+# HOW: each test EXTRACTS one function verbatim out of the shipped shell and runs
+# it against temp directories, stubbing only what spawns a process or touches the
+# host. Nothing is reimplemented — an assertion against a paraphrase proves nothing
+# about what ships. That requires the function under test to take its inputs as
+# arguments or environment rather than hardcoding paths; where it does not, the
+# honest answer is to leave it uncovered rather than to restructure shipped
+# behaviour for the test's benefit.
 #
 # Sourced by every tests/shell/*_test.sh via the runner; not executable itself.
 
