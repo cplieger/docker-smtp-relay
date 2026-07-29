@@ -113,28 +113,25 @@ no second copy to keep in sync.
 - **Recipient tokens are escaped before regex.** `escape_postfix_regex`
   renders operator-supplied addresses and domains as literals inside
   Postfix `regexp:` patterns (a mid-token `/` in an address is legal
-  RFC 5321 atext and is escaped, never warned). Leading-`/` tokens are
-  regexp-family: structure-parsed into the supported regexp_table(5)
+  RFC 5321 atext, so it is escaped rather than warned). Leading-`/` tokens
+  are regexp-family: structure-parsed into the supported regexp_table(5)
   forms (plain, `/pattern/flags`, dual `/P1/[flags]!/P2/[flags]`) and
-  emitted verbatim; a structurally unparseable leading-`/` token is
-  warned and suppressed (not emitted — its in-Postfix semantics were
-  never validated), unlike never-match warns, which still emit their
-  dead line. A non-empty `RECIPIENT_RESTRICTIONS` that
-  yields zero effective rules (whitespace-only, every entry a malformed
-  regex that Postfix would drop at map-open or an unparseable structure,
-  or every entry a deterministic
-  never-match domain or address shape — a leading-dot or slash-bearing
-  domain token, or an address with an empty local part, an empty domain,
-  or a dot immediately after the `@`)
-  is treated as a fatal error (exit 2) rather than silently rejecting all
-  mail; malformed or never-matching entries in a mixed list are warned
-  about and excluded from the effective-rule count. Regexp constructs are
-  also probed against two fixed impossible addresses with flag-mirrored
-  probes (dual form: P1 AND NOT P2): a construct that matches both is
-  treated as possibly allow-all (e.g. an empty alternation branch,
-  `/.*/`, or `/.*/!/^noreply@/`) and rejected fatally (exit 2) rather
-  than silently allowing all mail; empty pattern halves (`//`, `/x/!//`)
-  are fatal too.
+  emitted verbatim. A structurally unparseable leading-`/` token is warned
+  AND suppressed, because its in-Postfix semantics were never validated;
+  never-match warns still emit their dead line. A non-empty
+  `RECIPIENT_RESTRICTIONS` that yields zero effective rules is a fatal
+  error (exit 2) rather than a filter that silently rejects all mail:
+  whitespace-only input, every entry a malformed regex Postfix would drop
+  at map-open or an unparseable structure, or every entry a deterministic
+  never-match shape (a leading-dot or slash-bearing domain token, an
+  address with an empty local part, an empty domain, or a dot immediately
+  after the `@`). In a mixed list those entries are warned about and
+  excluded from the effective-rule count. Regexp constructs are also
+  probed against two fixed impossible addresses with flag-mirrored probes
+  (dual form: P1 AND NOT P2); a construct matching both is treated as
+  possibly allow-all and rejected fatally (exit 2), which covers an empty
+  alternation branch, `/.*/`, `/.*/!/^noreply@/`, and empty pattern halves
+  (`//`, `/x/!//`).
 - **Exit codes.** `2` = config/validation failure, `1` = runtime failure.
   Keep that split when adding new failure paths.
 - **Runs as root by design.** Postfix's master needs root to bind port 25;

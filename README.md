@@ -63,10 +63,10 @@ services:
 | `RELAY_PASSWORD` | SASL password for the upstream relay. Optional; see RELAY_LOGIN (both-or-neither). | _(unset)_ | No |
 | `RELAY_PORT` | Upstream relay port: 587 for STARTTLS, 465 for implicit TLS. 465 requires a mandatory `SMTP_TLS_SECURITY_LEVEL` (`encrypt` or stronger, including `dane-only` and `fingerprint`); `none`, `may`, and `dane` are rejected with it. | `587` | No |
 | `SMTP_TLS_SECURITY_LEVEL` | Outbound TLS level: `secure` (default; chain + hostname verification), `verify`, `encrypt`, `dane`/`dane-only`/`fingerprint` (see [TLS security levels](#tls-security-levels)), `may`, or `none`. See the [Postfix TLS README](https://www.postfix.org/TLS_README.html). Prefer `secure`/`verify` when SASL (`RELAY_LOGIN`/`RELAY_PASSWORD`) is set; `encrypt` and weaker lack peer authentication. | `secure` | No |
-| `SMTP_TLS_FINGERPRINT_CERT_MATCH` | One or more space-separated certificate or public-key digests of the upstream, each formatted as colon-separated hex pairs (see [TLS security levels](#tls-security-levels)). Both-or-neither with `SMTP_TLS_SECURITY_LEVEL=fingerprint`: required at that level, rejected at any other (a silently ignored trust anchor is a misconfiguration). | _none_ | No |
+| `SMTP_TLS_FINGERPRINT_CERT_MATCH` | One or more space-separated certificate or public-key digests of the upstream, each formatted as colon-separated hex pairs (see [TLS security levels](#tls-security-levels)). Both-or-neither with `SMTP_TLS_SECURITY_LEVEL=fingerprint`: required at that level, rejected at any other (a silently ignored trust anchor is a misconfiguration). | _(unset)_ | No |
 | `SMTP_TLS_FINGERPRINT_DIGEST` | Digest algorithm for fingerprint matching: `sha256` or `sha512` only (md5/sha1 are rejected as collision-weak). Only meaningful with `SMTP_TLS_SECURITY_LEVEL=fingerprint`; explicitly setting it at any other level is rejected (both-or-neither, like the cert match). | `sha256` | No |
-| `SMTPD_TLS_CERT_FILE` | Server certificate for inbound STARTTLS on port 25 (PEM; may include the chain). Both-or-neither with `SMTPD_TLS_KEY_FILE`: mount and set both to offer STARTTLS to sending clients (see [Inbound TLS (STARTTLS)](#inbound-tls-starttls)); without the pair, inbound stays cleartext. | _none_ | No |
-| `SMTPD_TLS_KEY_FILE` | Private key for the inbound STARTTLS certificate (PEM). Both-or-neither with `SMTPD_TLS_CERT_FILE`. A group- or world-readable key file draws a startup warning. | _none_ | No |
+| `SMTPD_TLS_CERT_FILE` | Server certificate for inbound STARTTLS on port 25 (PEM; may include the chain). Both-or-neither with `SMTPD_TLS_KEY_FILE`: mount and set both to offer STARTTLS to sending clients (see [Inbound TLS (STARTTLS)](#inbound-tls-starttls)); without the pair, inbound stays cleartext. | _(unset)_ | No |
+| `SMTPD_TLS_KEY_FILE` | Private key for the inbound STARTTLS certificate (PEM). Both-or-neither with `SMTPD_TLS_CERT_FILE`. A group- or world-readable key file draws a startup warning. | _(unset)_ | No |
 | `SMTPD_TLS_SECURITY_LEVEL` | Inbound TLS level: `may` (opportunistic; STARTTLS offered, cleartext still accepted) or `encrypt` (require TLS from every sender). Only meaningful with the cert/key pair set; setting it without the pair is rejected. | `may` when certs set | No |
 | `MESSAGE_SIZE_LIMIT` | Maximum message size in bytes (default 10240000 = 10 MB, AWS SES supports up to 40 MB with limit increase) | `10240000` | No |
 | `ACCEPTED_NETWORKS` | Space-separated CIDRs allowed to send mail through this relay. If unset, the entrypoint defaults to all RFC 1918 ranges (`192.168.0.0/16 172.16.0.0/12 10.0.0.0/8`); the shipped compose example deliberately narrows this to `192.168.0.0/16`. | `192.168.0.0/16 172.16.0.0/12 10.0.0.0/8` | No |
@@ -115,12 +115,11 @@ are fully supported for upstreams that warrant them:
 
 ### Inbound TLS (STARTTLS)
 
-The levels above govern the upstream (outbound) connection. Inbound port 25
-speaks cleartext SMTP by default — no STARTTLS is offered to sending clients.
-`ACCEPTED_NETWORKS` is relay authorization (who may send mail through the
-relay), not transport confidentiality: it does not encrypt anything. To offer
-STARTTLS on port 25, mount a certificate/key pair and point the two env vars
-at it:
+The levels above govern the upstream connection. Inbound port 25 speaks
+cleartext SMTP by default; no STARTTLS is offered to sending clients.
+`ACCEPTED_NETWORKS` decides who may relay mail through this container, not
+whether the session is encrypted. To offer STARTTLS on port 25, mount a
+certificate/key pair and set both env vars:
 
 ```yaml
     environment:
@@ -130,85 +129,63 @@ at it:
       - "/path/to/certs:/certs:ro"
 ```
 
-The default level, `may`, offers STARTTLS opportunistically and protects
-against passive capture only: an active on-path attacker can strip the
-STARTTLS offer, and clients that do not verify the certificate gain no
-authentication from it. `encrypt` requires every sender to negotiate TLS
-before mail is accepted — verify your senders actually support STARTTLS
-first, or their mail is refused at the door.
+The default level, `may`, offers STARTTLS opportunistically. That protects
+against passive capture only: an on-path attacker can strip the offer, and a
+client that skips certificate verification gains no authentication from it.
+`encrypt` requires TLS from every sender, so confirm your senders speak
+STARTTLS before setting it; their mail is refused at the door otherwise.
 
 ### Recipient filtering
 
-`RECIPIENT_RESTRICTIONS` is an optional allowlist evaluated at the door:
-when set, only matching recipients are accepted (non-matching mail is
-refused with an smtpd `NOQUEUE: reject`). Four token forms are supported,
-space-separated in the one variable:
+`RECIPIENT_RESTRICTIONS` is an optional allowlist evaluated at the door: when
+set, only matching recipients are accepted and everything else is refused with
+an smtpd `NOQUEUE: reject`. Four space-separated token forms are supported in
+the one variable:
 
-- **Address** — `alerts@example.com`. Rendered as an anchored, escaped
-  literal; matches exactly that address. A `/` inside the local part
-  (`john/doe@example.com`) is legal address syntax and is matched
-  literally.
-- **Domain** — `example.org`. Matches every recipient at exactly that
-  domain. Subdomain syntax (`.example.org`) is not supported and is warned
-  as never-matching.
-- **Regexp** — `/^ops-.*@example\.net$/`, a Postfix
-  [regexp_table(5)](https://www.postfix.org/regexp_table.5.html) pattern
-  emitted verbatim; backslash-escape a literal `/` inside the pattern. The
-  flag-suffixed form `/pattern/flags` is supported with flags `i`, `m`,
-  and `x`: per regexp_table(5), matching is case-insensitive with extended
-  syntax by default, and each flag occurrence toggles its property (`i`
-  case sensitivity, `x` extended-vs-basic syntax, `m` multi-line) — so
+- **Address**: `alerts@example.com`. Matched as an anchored, escaped literal,
+  so a `/` in the local part (`john/doe@example.com`) matches literally.
+- **Domain**: `example.org`. Matches every recipient at exactly that domain.
+  Subdomain syntax (`.example.org`) is not supported and is warned as
+  never-matching.
+- **Regexp**: `/^ops-.*@example\.net$/`, emitted verbatim as a Postfix
+  [regexp_table(5)](https://www.postfix.org/regexp_table.5.html) pattern;
+  backslash-escape a literal `/` inside it. The flag suffix `/pattern/flags`
+  accepts `i`, `m`, and `x` with regexp_table(5) semantics, where each
+  occurrence toggles its property. Matching is case-insensitive by default, so
   `/^alerts@example\.com$/i` matches only the lowercase spelling.
-- **Dual-pattern regexp** — `/pattern1/!/pattern2/` (either half may carry
-  flags): matches recipients that match `pattern1` AND NOT `pattern2`,
-  e.g. `/.*@example\.com/!/^noreply@/` for "the whole domain, except
-  noreply addresses".
+- **Dual-pattern regexp**: `/pattern1/!/pattern2/`, either half optionally
+  flagged. Matches `pattern1` AND NOT `pattern2`, for example
+  `/.*@example\.com/!/^noreply@/` for the whole domain except noreply.
 
-Regexp tokens are matched against the full recipient address as smtpd
-presents it (`user@domain` form), and never-match analysis is not
-attempted for regexp tokens: a compiling, non-universal pattern that can
-never match — e.g. the anchored `/^@example\.com$/` — still counts as an
-effective rule; regex authors own their reachability.
+Regexp tokens match against the full `user@domain` address smtpd presents.
+They are not analyzed for reachability: an anchored pattern that can never
+match, such as `/^@example\.com$/`, still counts as an effective rule.
 
-**Never-match warns.** Deterministic never-match tokens are warned at boot
-and excluded from the effective-rule count, but still rendered: a domain
-with a leading dot or an embedded `/`, and an address with an empty local
-part, an empty domain, or a dot right after the `@` (a bare `@` classifies
-as empty-local). A regexp pattern half that does not compile is warned the
-same way (Postfix drops that line at map load). A leading-`/` token whose
-structure cannot be parsed at all — no closing delimiter, a dangling or
-doubled `!`, an unknown flag character — is warned and additionally
-suppressed from the map: a rule this image could not validate might load
-in Postfix with semantics that were never checked.
+Three checks run at boot, so a filter that would silently refuse or admit
+every recipient fails visibly instead. The healthcheck cannot see either
+mistake, since port 25 answers either way.
 
-**Zero-effective-rules guard (exit 2).** A non-empty
-`RECIPIENT_RESTRICTIONS` in which every token is malformed, unparseable,
-or never-matching would render a filter whose only live line rejects
-everything; the container refuses to start instead. A mixed list still
-boots on its valid subset.
-
-**Universal-match guard (exit 2).** Every regexp construct is probed
-against two fixed, impossible addresses, with the construct's effective
-flags mirrored and the dual form evaluated as `P1 AND NOT P2`. A construct
-matching BOTH probes is treated as possibly allow-all — an honest
-heuristic, not a proof — and refused as an accidental-breadth risk:
-`/.*/`, `/./`, an empty alternation branch like
-`/a@b\.c|/`, and the dual near-allow-all `/.*/!/^noreply@/` are all
-refused. An empty pattern (`//`, or an empty dual half like `/x/!//`) is
-refused for the same reason: an empty pattern matches every string.
-Remediations: split a narrow alternation into separate
-`RECIPIENT_RESTRICTIONS` entries, and leave `RECIPIENT_RESTRICTIONS`
-empty only if allow-all is intended. The heuristic can over-refuse a
-pattern that merely shares structure or characters with both probes (for
-example one alternation spanning `\.invalid$` and `\.test$`); the split
-remediation resolves the plausible cases — `/\.invalid$/` and `/\.test$/`
-as separate entries each match at most one probe and pass.
-
-**Fail-closed rationale.** All of the above fails loud at boot rather
-than silently rejecting mail the operator wanted relayed or allowing mail
-the operator wanted refused — the healthcheck cannot see either failure
-(port 25 answers either way), so a boot-time exit 2 with a structured
-error is the only honest signal.
+- **Never-match warns.** A domain with a leading dot or an embedded `/`, an
+  address with an empty local part or empty domain or a dot right after the
+  `@`, and a regexp half that does not compile are each warned and excluded
+  from the effective-rule count. They are still rendered; Postfix drops an
+  uncompilable line when it opens the map. A leading-`/` token whose structure
+  cannot be parsed at all (no closing delimiter, a dangling or doubled `!`, an
+  unknown flag) is suppressed from the map instead, rather than loaded with
+  semantics this image never validated.
+- **Zero effective rules: exit 2.** When every token is malformed,
+  unparseable, or never-matching, the only live line left would reject all
+  mail, so the container refuses to start. A mixed list boots on its valid
+  subset.
+- **Possible allow-all: exit 2.** Every regexp construct is probed against two
+  impossible addresses, with its own flags mirrored and the dual form
+  evaluated as `P1 AND NOT P2`. A construct matching both probes is refused:
+  `/.*/`, `/./`, an empty alternation branch like `/a@b\.c|/`, the
+  near-allow-all `/.*/!/^noreply@/`, and any empty pattern (`//`, `/x/!//`).
+  The probe is a heuristic, so it can over-refuse a pattern you consider
+  narrow, such as one alternation spanning `\.invalid$` and `\.test$`. Split
+  that into separate entries (`/\.invalid$/` and `/\.test$/`) and both pass.
+  Leave `RECIPIENT_RESTRICTIONS` empty when allow-all is what you want.
 
 ### Volumes
 
@@ -284,10 +261,10 @@ your mail volume and adjust the `container` selector (or `job` / `service`,
 depending on your log collector) to your deployment, then route by whatever
 labels your Alertmanager uses. No deadman is shipped: delivery lines appear only
 when mail is sent, so quiet periods are normal and the container healthcheck
-already covers the dead-process case. Note the rule keys on upstream delivery
-status; mail refused at the door by recipient filtering logs as smtpd
-`NOQUEUE: reject` lines (no `status=` field), so extend the pattern with
-`NOQUEUE` if you want alerts on recipient-filter rejections too. The deferred and delivered counts can
+already covers the dead-process case. The rule keys on upstream delivery
+status; mail refused at the door by recipient filtering logs as an smtpd
+`NOQUEUE: reject` with no `status=` field, so add `NOQUEUE` to the pattern to
+alert on those too. The deferred and delivered counts can
 alternatively be extracted into Prometheus metrics with an Alloy `loki.process`
 `stage.metrics` block for dashboards, but this log-based rule needs no such setup.
 
