@@ -372,7 +372,7 @@ warn_public_network() {
     # hex digits followed by the separator.
     f[cd][0-9a-f][0-9a-f]:*) [ "$3" -ge 7 ] && return 0 ;;
     fe[89ab][0-9a-f]:*) [ "$3" -ge 10 ] && return 0 ;;
-    ::1) return 0 ;;
+    ::1) [ "$3" -ge 128 ] && return 0 ;;
   esac
   printf 'level=warn msg="ACCEPTED_NETWORKS entry is not inside private address space; every host in that range may relay mail through this server (a mistyped prefix is how a relay accidentally becomes an open relay)" network="%s" prefix=%s\n' \
     "$(sanitize_token "$1")" "$3" >&2

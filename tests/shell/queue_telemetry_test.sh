@@ -74,6 +74,7 @@ set -euf
 case "${SCAN_MODE:-real}" in
   fail) scan_queue_files() { return 1; } ;;
   silent) scan_queue_files() { return 0; } ;;
+  timeout) scan_queue_files() { return 143; } ;;
 esac
 case "${MKTEMP_MODE:-real}" in
   fail) mktemp() { return 1; } ;;
@@ -148,8 +149,8 @@ mkdir -p "$CASE/active"
 SCAN_MODE=fail
 run_case active "$CASE/active"
 [ "$_rc" -eq 0 ] && [ "$_queue_count" = 0 ] && [ "$_queue_ok" = false ] \
-  && [ "$(warns 'msg="queue depth unavailable" queue=active')" -eq 1 ] \
-  && ok "a failed scan marks the depth unavailable with one warn and the set -euf child survives" \
+  && [ "$(warns 'msg="queue depth unavailable" queue=active reason=scan_failed status=1')" -eq 1 ] \
+  && ok "a failed scan marks the depth unavailable with one warn naming the failing step, and the set -euf child survives" \
   || no "failed scan is fail-soft" "rc=$_rc, count=$_queue_count, ok=$_queue_ok, log: $(cat "$LOG")"
 
 # --- 4. the same for a failed mktemp (a full /tmp) -------------------------------
@@ -160,8 +161,8 @@ mkdir -p "$CASE/active"
 MKTEMP_MODE=fail
 run_case active "$CASE/active"
 [ "$_rc" -eq 0 ] && [ "$_queue_ok" = false ] \
-  && [ "$(warns 'msg="queue depth unavailable"')" -eq 1 ] \
-  && ok "a failed mktemp degrades the telemetry instead of aborting startup" \
+  && [ "$(warns 'msg="queue depth unavailable" queue=active reason=tmpfile')" -eq 1 ] \
+  && ok "a failed mktemp degrades the telemetry instead of aborting startup, attributed as tmpfile" \
   || no "failed mktemp is fail-soft" "rc=$_rc, ok=$_queue_ok, log: $(cat "$LOG")"
 
 # --- 5. a temp file that cannot be removed warns, and only warns -----------------
@@ -174,9 +175,24 @@ MKTEMP_MODE=dir
 SCAN_MODE=silent
 run_case active "$CASE/active"
 [ "$_rc" -eq 0 ] && [ "$_queue_ok" = false ] \
-  && [ "$(warns 'msg="queue depth unavailable" queue=active')" -eq 1 ] \
+  && [ "$(warns 'msg="queue depth unavailable" queue=active reason=count_failed')" -eq 1 ] \
   && [ "$(warns 'msg="queue temp cleanup failed" queue=active')" -eq 1 ] \
   && ok "a temp file that cannot be removed warns twice and startup continues" \
   || no "cleanup failure is warn-only" "rc=$_rc, ok=$_queue_ok, log: $(cat "$LOG")"
+
+# --- 6. an ELAPSED scan budget is attributed as a timeout, with the budget that
+# actually applied ----------------------------------------------------------------
+# BusyBox timeout reports its own TERM as 143, so the bait is the status the shipped
+# supervisor really produces on expiry. This is the case that pins the BUDGET: a
+# regression reporting STARTUP_CMD_TIMEOUT (30) instead of QUEUE_SCAN_TIMEOUT (5)
+# is invisible to every other assertion here.
+setup
+mkdir -p "$CASE/active"
+SCAN_MODE=timeout
+run_case active "$CASE/active"
+[ "$_rc" -eq 0 ] && [ "$_queue_count" = 0 ] && [ "$_queue_ok" = false ] \
+  && [ "$(warns 'msg="queue depth unavailable" queue=active reason=timeout timeout_seconds=5')" -eq 1 ] \
+  && ok "an elapsed scan budget is attributed as a timeout naming the 5s queue budget, not the 30s startup budget" \
+  || no "scan timeout attribution" "rc=$_rc, count=$_queue_count, ok=$_queue_ok, log: $(cat "$LOG")"
 
 report

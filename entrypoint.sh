@@ -813,9 +813,9 @@ run_bounded() {
 # when STATUS indicates the elapsed budget; empty otherwise. BUDGET names the
 # seconds reported, defaulting to STARTUP_CMD_TIMEOUT so a caller with its own
 # deadline (the queue scan) reports the budget that actually applied.
-# BusyBox timeout (the
-# only timeout in the runtime image) exits 143 (128+TERM) on expiry, or 137
-# (128+KILL) when the command ignored the TERM and the -k grace elapsed;
+# BusyBox timeout (the only timeout in the runtime image) exits 143
+# (128+TERM) on expiry, or 137 (128+KILL) when the command ignored the
+# TERM and the -k grace elapsed;
 # coreutils' 124 is accepted too for portability. Lets a caller's failure
 # log distinguish a timed-out operation from a plain failure without
 # duplicating the fields at every call site.

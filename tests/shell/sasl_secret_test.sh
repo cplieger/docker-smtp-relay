@@ -134,8 +134,12 @@ setup
 # every new file the inherited mode whatever the umask -- `touch` reads 770
 # under umask 022 -- so the assertion below would fail for a maintainer on
 # such a tree while passing in CI. That is a premise that cannot hold here,
-# which is what lib.sh's skip exists for; case 12 still pins the umask itself
-# (not a mode) through the real postmap_restricted, so the guard stays covered.
+# which is what lib.sh's skip exists for. Note precisely what the skip costs:
+# entrypoint.sh has TWO umask 077 guards, and case 12 pins the OTHER one
+# (postmap_restricted's, recorded as a umask value rather than a mode, so it
+# survives here). The plaintext write's own umask 077 is covered by THIS case
+# alone, so on an ACL-inheriting tree it is verified only in CI, whose
+# filesystem does derive modes from the umask.
 (umask 077 && : >"$CASE/mode-probe")
 _fs_mode=$(stat -c %a "$CASE/mode-probe")
 if [ "$_fs_mode" != 600 ]; then

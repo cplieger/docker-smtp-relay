@@ -184,6 +184,21 @@ net '2000::/16'
   && ok "a global-unicast IPv6 entry (2000::/16) warns without failing the boot" \
   || no "public IPv6 range warn" "rc=$_rc, log: $(cat "$LOG")"
 
+# The loopback spelling needs its host prefix to stay silent: ::1/8 masks to ::/8,
+# which contains the IPv4-mapped public space (::ffff:0:0/96), so a value that reads
+# as loopback-only authorizes Internet senders. Only the exact /128 is contained.
+net '::1/8'
+[ "$_rc" -eq 0 ] && logged 'msg="ACCEPTED_NETWORKS entry is not inside private address space' \
+  && ok "a broadened loopback entry (::1/8 masks to ::/8) warns without failing the boot" \
+  || no "broadened loopback warn" "rc=$_rc, log: $(cat "$LOG")"
+
+# The silence control for that arm: the exact loopback host must not warn, so the
+# case above cannot be satisfied by a validator that warns on every ::1 spelling.
+net '::1/128'
+[ "$_rc" -eq 0 ] && [ ! -s "$LOG" ] \
+  && ok "the exact loopback host (::1/128) passes silently" \
+  || no "exact loopback silence" "rc=$_rc, log: $(cat "$LOG")"
+
 # --- 7. the control: a legitimate mixed list passes silently ----------------------
 # Without this, every case above would still pass against a validator that refused
 # everything.

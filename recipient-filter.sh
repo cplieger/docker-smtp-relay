@@ -282,8 +282,8 @@ classify_regexp_halves() {
 # /^$|^addr$/) correctly PASS (not this guard's class; they boot as
 # reject-heavy configs, the fail-closed direction). The probes mirror each
 # half's EFFECTIVE flags via regex_half_matches (i/x toggle parity), so a
-# case-only-universal /[A-Z]/ still flags
-# while the case-SENSITIVE /[A-Z]/i correctly passes. The guard only runs
+# case-only-universal /[A-Z]/ still flags while the case-SENSITIVE
+# /[A-Z]/i correctly passes. The guard only runs
 # when every half compiled (an uncompilable half means Postfix skips the
 # whole line at map load — already warned, status 10 — so match probes
 # would be meaningless).
