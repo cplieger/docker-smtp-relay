@@ -183,11 +183,10 @@ regex_half_compiles() {
 # regex_half_matches PATTERN EXT ICASE STRING — match-probe one half
 # against STRING with grep flags mirroring the half's effective
 # regexp_table(5) state: -E only while the half is extended syntax, -i
-# only while it is case-insensitive. This generalizes the earlier
-# blanket -i (which mirrored the default only): a half whose effective
-# flags toggled case sensitivity is probed case-SENSITIVELY, so
-# /[A-Z]/i — a restrictive, case-sensitive pattern under Postfix's
-# toggle semantics — is probed the way Postfix will actually match it.
+# only while it is case-insensitive. A half whose effective flags toggled
+# case sensitivity is probed case-SENSITIVELY, so /[A-Z]/i — a restrictive,
+# case-sensitive pattern under Postfix's toggle semantics — is probed the
+# way Postfix will actually match it.
 regex_half_matches() {
   _rm_opts=''
   [ "$2" -eq 1 ] && _rm_opts='E'
@@ -282,9 +281,8 @@ classify_regexp_halves() {
 # each match one probe only and pass. Never-match patterns (/^$/,
 # /^$|^addr$/) correctly PASS (not this guard's class; they boot as
 # reject-heavy configs, the fail-closed direction). The probes mirror each
-# half's EFFECTIVE flags via regex_half_matches (i/x toggle parity — the
-# earlier blanket -i covered only the default state, when a flags suffix
-# could not reach this arm), so a case-only-universal /[A-Z]/ still flags
+# half's EFFECTIVE flags via regex_half_matches (i/x toggle parity), so a
+# case-only-universal /[A-Z]/ still flags
 # while the case-SENSITIVE /[A-Z]/i correctly passes. The guard only runs
 # when every half compiled (an uncompilable half means Postfix skips the
 # whole line at map load — already warned, status 10 — so match probes
@@ -324,8 +322,8 @@ reject_universal_construct() {
 # Compile-warn arms still warn and emit the line unchanged, but return 10
 # (ineffective) so the entry no longer satisfies the zero-rules guard — an
 # all-malformed list is fatal there (2026-07 decision). The
-# unparseable-structure arm (which REPLACED the earlier unescaped-delimiter
-# heuristic) also returns 10 but does NOT emit; see its comment.
+# unparseable-structure arm also returns 10 but does NOT emit; see its
+# comment.
 emit_regexp_recipient_rule() {
   # Postfix's dict_regexp ends the pattern at the FIRST unescaped /, so any
   # entry beginning with // (//, ///, //foo/) has an EMPTY effective first

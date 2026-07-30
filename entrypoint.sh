@@ -437,7 +437,11 @@ validate_runtime_config() {
     # (read bit in either of the last two octal digits), but keep it a
     # warning — the operator may have deliberate group-read semantics on
     # the mount (e.g. a cert-renewal sidecar's shared group).
-    _key_mode=$(stat -c %a -- "$SMTPD_TLS_KEY_FILE" 2>/dev/null) || _key_mode=''
+    if ! _key_mode=$(stat -c %a -- "$SMTPD_TLS_KEY_FILE" 2>/dev/null); then
+      _key_mode=''
+      printf 'level=warn msg="could not read inbound TLS key file mode; the group/world-readable check was skipped" path="%s"\n' \
+        "$(sanitize_token "$SMTPD_TLS_KEY_FILE")" >&2
+    fi
     case "$_key_mode" in
       *[4-7]? | *[4-7])
         printf 'level=warn msg="inbound TLS key file is group- or world-readable" path="%s" mode=%s\n' \
@@ -789,6 +793,12 @@ terminate_startup_child() {
 # pathological one; timeout KILLs 5s after its TERM if the command ignores it.
 readonly STARTUP_CMD_TIMEOUT=30
 
+# Elapsed-time budget for the queue-depth scans. Separate from
+# STARTUP_CMD_TIMEOUT because a spool walk is bounded much tighter than a
+# Postfix startup command, and the log must report the budget that actually
+# applied.
+readonly QUEUE_SCAN_TIMEOUT=5
+
 # run_bounded CMD [ARGS...] — run a finite external startup operation through
 # run_interruptible under the elapsed-time budget above. The recorded startup
 # child is the timeout supervisor, whose own TERM handling also terminates
@@ -799,8 +809,11 @@ run_bounded() {
   run_interruptible timeout -k 5 "$STARTUP_CMD_TIMEOUT" "$@"
 }
 
-# timeout_log_fields STATUS — emit the structured timeout log fields when
-# STATUS indicates the elapsed budget; empty otherwise. BusyBox timeout (the
+# timeout_log_fields STATUS [BUDGET] — emit the structured timeout log fields
+# when STATUS indicates the elapsed budget; empty otherwise. BUDGET names the
+# seconds reported, defaulting to STARTUP_CMD_TIMEOUT so a caller with its own
+# deadline (the queue scan) reports the budget that actually applied.
+# BusyBox timeout (the
 # only timeout in the runtime image) exits 143 (128+TERM) on expiry, or 137
 # (128+KILL) when the command ignored the TERM and the -k grace elapsed;
 # coreutils' 124 is accepted too for portability. Lets a caller's failure
@@ -808,7 +821,7 @@ run_bounded() {
 # duplicating the fields at every call site.
 timeout_log_fields() {
   case "$1" in
-    124 | 137 | 143) printf ' reason=timeout timeout_seconds=%d' "$STARTUP_CMD_TIMEOUT" ;;
+    124 | 137 | 143) printf ' reason=timeout timeout_seconds=%d' "${2:-$STARTUP_CMD_TIMEOUT}" ;;
   esac
 }
 
@@ -1036,7 +1049,7 @@ probe_upstream() {
 # replaces the wrapper so the recorded PID names the timeout-supervised find
 # (terminate_startup_child TERMs the operation, not an intermediate shell).
 scan_queue_files() {
-  exec timeout -k 5 5 find "$1" -type f >"$2" 2>/dev/null
+  exec timeout -k 5 "$QUEUE_SCAN_TIMEOUT" find "$1" -type f >"$2" 2>/dev/null
 }
 
 count_queue() {
@@ -1054,13 +1067,27 @@ count_queue() {
     # (e.g. full /tmp), a failed or timed-out scan, and a failed wc read (an
     # I/O error or a disappearing temp file) all report the depth as
     # unavailable instead of aborting PID 1 under set -e before Postfix
-    # starts. The && chain short-circuits exactly like the old nested ifs:
-    # a failed step skips the rest, and any failure lands in the one warn.
-    if ! { _cq_tmp=$(mktemp) && run_interruptible scan_queue_files "$_cq_dir" "$_cq_tmp" \
-      && _queue_count=$(wc -l <"$_cq_tmp"); }; then
+    # starts. Each step records its own reason so the warn names the failing
+    # step: an operator can tell a wedged or slow spool (reason=timeout, with
+    # the budget that applied) from a full /tmp or a failed count.
+    _cq_reason=''
+    if ! _cq_tmp=$(mktemp); then
+      _cq_tmp=''
+      _cq_reason=' reason=tmpfile'
+    else
+      _cq_scan_status=0
+      run_interruptible scan_queue_files "$_cq_dir" "$_cq_tmp" || _cq_scan_status=$?
+      if [ "$_cq_scan_status" -ne 0 ]; then
+        _cq_reason=$(timeout_log_fields "$_cq_scan_status" "$QUEUE_SCAN_TIMEOUT")
+        [ -n "$_cq_reason" ] || _cq_reason=" reason=scan_failed status=$_cq_scan_status"
+      elif ! _queue_count=$(wc -l <"$_cq_tmp"); then
+        _cq_reason=' reason=count_failed'
+      fi
+    fi
+    if [ -n "$_cq_reason" ]; then
       _queue_count=0
       _queue_ok=false
-      printf 'level=warn msg="queue depth unavailable" queue=%s\n' "$_cq_name" >&2
+      printf 'level=warn msg="queue depth unavailable" queue=%s%s\n' "$_cq_name" "$_cq_reason" >&2
     fi
     if [ -n "$_cq_tmp" ]; then
       # Cleanup failure is warn-and-continue: the telemetry path is optional
@@ -1147,8 +1174,13 @@ case "$MODE" in
     ;;
   *)
     # MODE is a raw CLI argument that bypasses env validation (it may even
-    # contain a newline); flag the rejection without interpolating it.
-    printf 'level=error msg="unknown mode" mode_invalid=true valid="run render"\n' >&2
+    # contain a newline), and unlike every other rejection site there is no
+    # var name to log in its place -- the value is the only context an
+    # operator has. Route it through sanitize_token, which strips the logfmt
+    # delimiters and control bytes and caps the length, so the line stays a
+    # single parseable record. mode_invalid=true is kept for existing consumers.
+    printf 'level=error msg="unknown mode" mode_invalid=true mode="%s" valid="run render"\n' \
+      "$(sanitize_token "$MODE")" >&2
     exit 2
     ;;
 esac

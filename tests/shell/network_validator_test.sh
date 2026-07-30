@@ -46,6 +46,7 @@ load_function sanitize_token
 load_function int_too_wide
 load_function validate_ipv6_cidr
 load_function validate_ipv4_cidr
+load_function warn_public_network
 load_function validate_no_open_relay
 
 LOG="$WORK/log"
@@ -165,7 +166,25 @@ refuses '192.168.1.300/24' 'msg="IPv4 octet out of range"' \
 refuses '1234567890123456789.0.0.0/8' 'msg="IPv4 octet too large"' \
   "an IPv4 octet too wide to compare as a shell integer is refused by length"
 
-# --- 6. the control: a legitimate mixed list passes silently ----------------------
+# --- 6. the public-address-space warn --------------------------------------------
+# The /8 floor bounds the SIZE of the authorized range, never WHOSE addresses are
+# in it, so a mistyped prefix (192.168.0.0/8, which Postfix masks to 192.0.0.0/8)
+# satisfies every fatal arm above and still authorizes ~16M public hosts to relay.
+# Warn-only by design, which makes the warn the operator's only signal.
+net '192.168.0.0/8'
+[ "$_rc" -eq 0 ] && logged 'msg="ACCEPTED_NETWORKS entry is not inside private address space' \
+  && ok "a public-space IPv4 entry (192.168.0.0/8 masks to 192.0.0.0/8) warns without failing the boot" \
+  || no "public IPv4 range warn" "rc=$_rc, log: $(cat "$LOG")"
+
+# The IPv6 half: 2000::/16 is inside global unicast, and the first hextet must be
+# read in full -- fc5::/16 is 0x0fc5, NOT inside fc00::/7, so a prefix-only match
+# would wrongly stay silent on it.
+net '2000::/16'
+[ "$_rc" -eq 0 ] && logged 'msg="ACCEPTED_NETWORKS entry is not inside private address space' \
+  && ok "a global-unicast IPv6 entry (2000::/16) warns without failing the boot" \
+  || no "public IPv6 range warn" "rc=$_rc, log: $(cat "$LOG")"
+
+# --- 7. the control: a legitimate mixed list passes silently ----------------------
 # Without this, every case above would still pass against a validator that refused
 # everything.
 net '192.168.0.0/16 172.16.0.0/12 10.0.0.0/8 fd00::/8'

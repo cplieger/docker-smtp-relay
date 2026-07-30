@@ -2,7 +2,7 @@
 # ---------------------------------------------------------------------------
 # validate.sh — input-validation helpers for smtp-relay entrypoint.
 # Sourced at runtime by entrypoint.sh. Canonical copy; there is no shared
-# validation library (the former lib/shell/validate.sh was removed).
+# validation library.
 # ---------------------------------------------------------------------------
 
 # printf '%s' + trailing-newline strip lets a single trailing newline pass
@@ -81,8 +81,7 @@ validate_no_newlines() {
 #     structure-parsed, per-half compile-probed with flag-mirrored grep,
 #     and emitted verbatim as effective rules; a structurally unparseable
 #     leading-/ token (no closing delimiter, dangling or doubled !,
-#     unknown flag) draws a warn and is SUPPRESSED (status 10), REPLACING
-#     the old unescaped-delimiter heuristic and its inaccurate wording;
+#     unknown flag) draws a warn and is SUPPRESSED (status 10);
 #     and mid-token slashes in address tokens are correct escaped literals
 #     (/ is RFC 5321 atext — never warned).
 
@@ -339,6 +338,46 @@ validate_ipv4_cidr() {
   done
 }
 
+# warn_public_network NET IP PREFIX -- the open-relay guard below rejects the
+# two all-address literals and any prefix under /8, but a /8 (or /16, /32 in
+# IPv6) can still sit entirely inside PUBLIC address space: 192.168.0.0/8
+# masks to 192.0.0.0/8 and authorizes ~16M Internet hosts to relay, and
+# 2000::/16 authorizes a slice of global-unicast IPv6. Postfix accepts both
+# silently and the healthcheck stays green, so the only signal is this warn.
+# Warn, not fatal: a deployment relaying for a public subnet it owns is
+# legitimate, so refusing would be a config-acceptance change.
+# Containment is decided from the leading octets plus the prefix, which is
+# exact for the RFC 1918 / RFC 6598 / RFC 3927 / RFC 4193 / RFC 4291 blocks
+# (an entry inside the block whose prefix is at least the block's prefix is
+# contained, whatever the host bits Postfix masks off).
+warn_public_network() {
+  _wpn_addr=$(printf '%s' "$2" | LC_ALL=C tr 'ABCDEF' 'abcdef')
+  case "$_wpn_addr" in
+    \[*)
+      _wpn_addr="${_wpn_addr#\[}"
+      _wpn_addr="${_wpn_addr%\]}"
+      ;;
+  esac
+  case "$_wpn_addr" in
+    10.*) [ "$3" -ge 8 ] && return 0 ;;
+    127.*) [ "$3" -ge 8 ] && return 0 ;;
+    192.168.*) [ "$3" -ge 16 ] && return 0 ;;
+    169.254.*) [ "$3" -ge 16 ] && return 0 ;;
+    172.1[6-9].* | 172.2[0-9].* | 172.3[01].*) [ "$3" -ge 12 ] && return 0 ;;
+    100.6[4-9].* | 100.[7-9][0-9].* | 100.1[01][0-9].* | 100.12[0-7].*)
+      [ "$3" -ge 10 ] && return 0
+      ;;
+    # IPv6: fc00::/7 (ULA) and fe80::/10 (link-local). The first hextet must
+    # be spelled in full (fc5:: is 0x0fc5, NOT inside fc00::/7), so match four
+    # hex digits followed by the separator.
+    f[cd][0-9a-f][0-9a-f]:*) [ "$3" -ge 7 ] && return 0 ;;
+    fe[89ab][0-9a-f]:*) [ "$3" -ge 10 ] && return 0 ;;
+    ::1) return 0 ;;
+  esac
+  printf 'level=warn msg="ACCEPTED_NETWORKS entry is not inside private address space; every host in that range may relay mail through this server (a mistyped prefix is how a relay accidentally becomes an open relay)" network="%s" prefix=%s\n' \
+    "$(sanitize_token "$1")" "$3" >&2
+}
+
 validate_no_open_relay() {
   for _net in $1; do
     case "$_net" in
@@ -385,6 +424,7 @@ validate_no_open_relay() {
         return 1
         ;;
     esac
+    warn_public_network "$_net" "$_ip" "$_prefix"
   done
 }
 

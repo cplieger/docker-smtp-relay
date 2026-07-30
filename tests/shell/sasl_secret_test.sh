@@ -129,12 +129,26 @@ run_write
 # mode, so only the create path honors the umask. Sampled at postmap time because
 # the function deletes the plaintext before returning.
 setup
-: >"$SASL_PASSWD_FILE"
-chmod 644 "$SASL_PASSWD_FILE"
-run_write
-[ "$(cat "$SEEN_MODE")" = 600 ] \
-  && ok "the plaintext credential file is 0600 while postmap reads it, even over a stale 0644 file" \
-  || no "plaintext created under umask 077" "mode at postmap time was $(cat "$SEEN_MODE"), not 600"
+# Premise: the scratch filesystem has to derive a new file's mode from the
+# umask at all. An ACL-inheriting mount (measured on ZFS with nfs4acl) gives
+# every new file the inherited mode whatever the umask -- `touch` reads 770
+# under umask 022 -- so the assertion below would fail for a maintainer on
+# such a tree while passing in CI. That is a premise that cannot hold here,
+# which is what lib.sh's skip exists for; case 12 still pins the umask itself
+# (not a mode) through the real postmap_restricted, so the guard stays covered.
+(umask 077 && : >"$CASE/mode-probe")
+_fs_mode=$(stat -c %a "$CASE/mode-probe")
+if [ "$_fs_mode" != 600 ]; then
+  skip "the plaintext credential file is 0600 while postmap reads it" \
+    "this filesystem does not derive modes from the umask (umask 077 created mode $_fs_mode)"
+else
+  : >"$SASL_PASSWD_FILE"
+  chmod 644 "$SASL_PASSWD_FILE"
+  run_write
+  [ "$(cat "$SEEN_MODE")" = 600 ] \
+    && ok "the plaintext credential file is 0600 while postmap reads it, even over a stale 0644 file" \
+    || no "plaintext created under umask 077" "mode at postmap time was $(cat "$SEEN_MODE"), not 600"
+fi
 
 # --- 3. the sasl_passwd record keeps the field format the validators protect -----
 # `<relayhost> <login>:<password>`, split on the first whitespace then the first

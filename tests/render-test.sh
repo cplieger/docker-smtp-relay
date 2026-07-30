@@ -277,6 +277,13 @@ check_fail networks-leading-zero-octet 2 \
   RELAY_HOST=smtp.example.com \
   ACCEPTED_NETWORKS=192.168.010.0/24
 
+# A well-formed entry that clears every fatal arm yet authorizes public hosts to
+# relay (Postfix masks 192.168.0.0/8 to 192.0.0.0/8). Warn-only by design, so the
+# render must still succeed -- the warn is the operator's only signal.
+check_log networks-public-range 0 'not inside private address space' \
+  RELAY_HOST=smtp.example.com \
+  ACCEPTED_NETWORKS=192.168.0.0/8
+
 check_fail sasl-cleartext 2 \
   RELAY_HOST=smtp.example.com \
   RELAY_LOGIN=user \

@@ -39,12 +39,17 @@ set -u
 . "$(dirname -- "$0")/lib.sh"
 new_workdir >/dev/null
 
-# The real functions, extracted once and sourced by every child.
+# The real functions, extracted once and sourced by every child. count_queue calls
+# timeout_log_fields to attribute a timed-out scan, and scan_queue_files reads the
+# shipped QUEUE_SCAN_TIMEOUT constant -- both come from entrypoint.sh rather than a
+# copy, so a drifting budget or a changed attribution surfaces here.
 FNS="$WORK/fns.sh"
+budget_src=$(extract_range '^readonly QUEUE_SCAN_TIMEOUT=' '^$' "$WORK/queue_scan_timeout.sh") || exit 1
 extract_function run_interruptible "$WORK/f1.sh" >/dev/null
 extract_function scan_queue_files "$WORK/f2.sh" >/dev/null
-extract_function count_queue "$WORK/f3.sh" >/dev/null
-cat "$WORK/f1.sh" "$WORK/f2.sh" "$WORK/f3.sh" >"$FNS"
+extract_function timeout_log_fields "$WORK/f3.sh" >/dev/null
+extract_function count_queue "$WORK/f4.sh" >/dev/null
+cat "$budget_src" "$WORK/f1.sh" "$WORK/f2.sh" "$WORK/f3.sh" "$WORK/f4.sh" >"$FNS"
 
 # The timeout PATH shim: records the supervisor argv, then hands off to the real
 # binary. Recording is not reimplementing -- the shipped code still decides
