@@ -35,21 +35,19 @@ validate_no_newlines() {
 #   Tier 1 (always fatal, security): injection into rendered config (the
 #     newline/metacharacter checks), open-relay CIDR rejection, credential
 #     exposure (SASL field format; cleartext TLS with SASL), and any input
-#     that silently turns a configured restriction into allow-all (the
-#     empty / slash-leading recipient regex class — extended by the 2026-07
-#     round-4 grant to the dual form's empty pattern halves — and, an
-#     explicit closed-set grant, 2026-07 round-3 judgement + user
-#     batch-closure approval, the universal-match regexp class: any
-#     recipient construct the two-impossible-probe guard in
-#     recipient-filter.sh flags as possibly allow-all. 2026-07 round-4
-#     reshaped that guard: it now applies to the FULL construct — single
-#     form iff P matches a probe, dual form iff P1 matches AND NOT P2 —
-#     with per-half flag-mirrored probes, and its fatal message states the
-#     honest possibly-allow-all heuristic plus the split / leave-empty
-#     remediations instead of claiming a proof).
+#     that silently turns a configured restriction into allow-all. That
+#     last class is an explicit closed-set grant covering the empty /
+#     slash-leading recipient regex class, including the dual form's empty
+#     pattern halves, and the universal-match regexp class: any recipient
+#     construct the two-impossible-probe guard in recipient-filter.sh flags
+#     as possibly allow-all. That guard applies to the FULL construct —
+#     single form iff P matches a probe, dual form iff P1 matches AND NOT
+#     P2 — with per-half flag-mirrored probes, and its fatal message states
+#     the honest possibly-allow-all heuristic plus the split / leave-empty
+#     remediations instead of claiming a proof.
 #   Tier 2 (fatal, documented contract): value combinations the app's own
 #     documented contract says can never function -- the implicit-TLS 465
-#     mandatory-level gate, the landed never-matching-shape escalations
+#     mandatory-level gate, the never-matching-shape escalations
 #     (whitespace-only / leading-zero / multi-slash network entries,
 #     leading-bracket RELAY_HOST defects), and the fingerprint-family
 #     checks (both-or-neither with level=fingerprint; per-token
@@ -60,35 +58,32 @@ validate_no_newlines() {
 #     succeeding boot past the healthcheck start-period; hard-coded and
 #     deliberately not tunable -- the alternative for a list that big is a
 #     mounted Postfix table or a policy service). This set is CLOSED: each
-#     entry was an explicit user decision; new entries require the same.
+#     entry is an explicit user decision; new entries require the same.
 #   Tier 3 (operator's responsibility): syntactically-plausible but
 #     semantically-wrong values beyond those tiers (typo'd hostnames,
 #     host:port confusion, exotic never-matching shapes). The validator does
 #     NOT chase these per-shape: the existing warn arms (all shape
-#     heuristics; every $TLS_LEVELS entry is now fully supported, so no
-#     level-specific warn arms remain) are grandfathered-final, no new shape
-#     arms get added without a Tier 1/2 justification, and Postfix's own
-#     runtime diagnostics are the source of truth for them. 2026-07 explicit
-#     user decisions on top of this baseline: the inbound TLS PEM-shape
-#     hints (entrypoint.sh, warn-only) were added, and the two deterministic
-#     never-match domain shapes in recipient-filter.sh keep their warns but
-#     no longer count as effective rules (an all-never-match list now trips
-#     the zero-effective-rules guard; mixed lists keep booting on the valid
-#     subset). 2026-07 round-3 explicit grant, same template: the three
-#     deterministic never-match address shapes in recipient-filter.sh
-#     (empty local part, empty domain, dot-after-@) warn and no longer
-#     count as effective rules either. 2026-07 round-4 grants (user
-#     dispositions, one coherent redesign of the regexp-token seam in
-#     recipient-filter.sh): any token STARTING with / classifies as
-#     regexp-family; the regexp_table(5) dual-pattern form
-#     /P1/[flags]!/P2/[flags] and the /pattern/flags form (flag set i/m/x,
-#     verified in-image against the pinned Postfix) are fully supported —
-#     structure-parsed, per-half compile-probed with flag-mirrored grep,
-#     and emitted verbatim as effective rules; a structurally unparseable
-#     leading-/ token (no closing delimiter, dangling or doubled !,
-#     unknown flag) draws a warn and is SUPPRESSED (status 10);
-#     and mid-token slashes in address tokens are correct escaped literals
-#     (/ is RFC 5321 atext — never warned).
+#     heuristics; every $TLS_LEVELS entry is fully supported, so no
+#     level-specific warn arms remain) are final, no new shape arms get
+#     added without a Tier 1/2 justification, and Postfix's own runtime
+#     diagnostics are the source of truth for them. Warn-only by explicit
+#     user decision, on top of that baseline: the inbound TLS PEM-shape
+#     hints (entrypoint.sh); and, in recipient-filter.sh, the two
+#     deterministic never-match domain shapes plus the three never-match
+#     address shapes (empty local part, empty domain, dot-after-@) — each
+#     keeps its warn but does not count as an effective rule, so an
+#     all-never-match list trips the zero-effective-rules guard while a
+#     mixed list still boots on its valid subset. The regexp-token seam in
+#     recipient-filter.sh is granted on the same template: any token
+#     STARTING with / classifies as regexp-family; the regexp_table(5)
+#     dual-pattern form /P1/[flags]!/P2/[flags] and the /pattern/flags form
+#     (flag set i/m/x, verified in-image against the pinned Postfix) are
+#     fully supported — structure-parsed, per-half compile-probed with
+#     flag-mirrored grep, and emitted verbatim as effective rules; a
+#     structurally unparseable leading-/ token (no closing delimiter,
+#     dangling or doubled !, unknown flag) draws a warn and is SUPPRESSED
+#     (status 10); and mid-token slashes in address tokens are correct
+#     escaped literals (/ is RFC 5321 atext — never warned).
 
 # sanitize_token -- strip logfmt delimiters (backslash, double quote) and
 # control bytes (CR, VT, FF, ...), and bound the value to 512 bytes, so a

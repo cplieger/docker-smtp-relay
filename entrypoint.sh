@@ -401,8 +401,8 @@ validate_smtpd_tls_files() {
       exit 2
     fi
   done
-  # PEM-shape hints, warn-only (2026-07 user decision; see the Tier 3
-  # note in validate.sh): a swapped cert/key pair — the classic operator
+  # PEM-shape hints are warn-only (see the Tier 3 note in validate.sh): a
+  # swapped cert/key pair — the classic operator
   # mistake when both env vars are set together — or a non-PEM file
   # passes the readable-file loop above, the startup line logs
   # smtpd_tls=may|encrypt as if TLS were live, and every STARTTLS
@@ -1055,11 +1055,11 @@ probe_upstream() {
 
 # ---------------------------------------------------------------------------
 # count_queue — bounded, error-checked count of files in one spool queue
-# directory. The old inline pipeline suppressed find errors and took the
-# pipeline status from wc, so an unreadable, corrupt, or disappearing spool
-# was reported as an authoritative 0 with no warning, and an unbounded find
-# over a pathological volume could hold startup indefinitely. Run the find
-# under a short timeout via run_interruptible (a docker stop mid-scan is
+# directory. Scan through a bounded temp file so find failures cannot be
+# masked by wc or reported as an authoritative zero: an unreadable, corrupt,
+# or disappearing spool must warn rather than present a real 0, and an
+# unbounded find over a pathological volume must not hold startup. Run the
+# find under a short timeout via run_interruptible (a docker stop mid-scan is
 # honored), check the scan status before counting, and report availability
 # instead of presenting a failed scan as a real zero.
 # Usage: count_queue NAME DIR — sets _queue_count and _queue_ok (true|false);
