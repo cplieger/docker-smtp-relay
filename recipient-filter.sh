@@ -77,11 +77,12 @@ emit_escaped_literal_rule() {
 # mirrored as unparseable structure (warn + ineffective), never emitted
 # and never fatal.
 # Keep this as one awk pass so token parsing stays linear in token length:
-# repeated shell slicing is quadratic, and RECIPIENT_RESTRICTIONS has no
-# length bound, so a multi-KiB pattern would hold PID 1 in pre-start
-# validation. The single-line pipe and the heredoc read-back are safe
-# because emit_recipient_rule rejects whitespace-bearing tokens fatally,
-# so TOKEN can never contain a newline.
+# repeated shell slicing is quadratic, and validate.sh's MAX_RECIPIENT_BYTES
+# deliberately admits a single ~8 KiB regexp construct, so a quadratic scan
+# would hold PID 1 in pre-start validation at a length the bounds accept.
+# The single-line pipe and the heredoc read-back are safe because
+# emit_recipient_rule rejects whitespace-bearing tokens fatally, so TOKEN
+# can never contain a newline.
 parse_regexp_construct() {
   _rx_fields=$(
     printf '%s\n' "$1" | awk '

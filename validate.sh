@@ -54,11 +54,14 @@ validate_no_newlines() {
 #     colon-separated-hex-pairs format with digest-matching pair count;
 #     sha256/sha512 digest allowlist), and the RECIPIENT_RESTRICTIONS size
 #     bounds (max rules, max bytes: rendering costs external processes per
-#     rule before Postfix binds port 25, so a list past the bound delays a
-#     succeeding boot past the healthcheck start-period; hard-coded and
-#     deliberately not tunable -- the alternative for a list that big is a
-#     mounted Postfix table or a policy service). This set is CLOSED: each
-#     entry is an explicit user decision; new entries require the same.
+#     rule before Postfix binds port 25, so the count and the length are
+#     capped at a conservative fixed budget an order of magnitude inside
+#     the healthcheck start-period, NOT at the measured point where a boot
+#     actually misses it; hard-coded and deliberately not tunable, because
+#     this image renders smtpd_recipient_restrictions itself and exposes
+#     no access-map or policy-service setting, so a larger allowlist needs
+#     a Postfix deployment of its own). This set is CLOSED: each entry is
+#     an explicit user decision; new entries require the same.
 #   Tier 3 (operator's responsibility): syntactically-plausible but
 #     semantically-wrong values beyond those tiers (typo'd hostnames,
 #     host:port confusion, exotic never-matching shapes). The validator does
