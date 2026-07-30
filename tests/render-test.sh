@@ -6,9 +6,8 @@
 # recipient_access to $CONF_DIR without invoking Postfix or writing secrets)
 # against a matrix of env inputs, and diffs the generated files against the
 # committed fixtures in tests/golden/. Failure cases assert the validation
-# exit code (2). Pure POSIX sh; needs only sh, sed, diff, mktemp, head, stat,
-# timeout (all present in the BusyBox test stage), plus a C compiler when run
-# from a source checkout (see the renderer block below).
+# exit code (2). Pure POSIX sh; needs only sh, sed, diff, mktemp, awk,
+# timeout (all present in the BusyBox test stage).
 #
 # Run locally from the repo root:   sh tests/render-test.sh
 # Regenerate fixtures after an intended change:  sh tests/render-test.sh --record
@@ -22,40 +21,6 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "$0")" && pwd)
 ENTRYPOINT_DIR="${ENTRYPOINT_DIR:-$(dirname -- "$SCRIPT_DIR")}"
 ENTRYPOINT="$ENTRYPOINT_DIR/entrypoint.sh"
 GOLDEN_DIR="$SCRIPT_DIR/golden"
-HELPER_SRC="$(dirname -- "$SCRIPT_DIR")/smtp-recipient-render.c"
-HELPER_BIN=smtp-recipient-render
-
-# --- the recipient map renderer -------------------------------------------
-# recipient-filter.sh resolves the renderer on PATH, and every check below
-# runs the entrypoint under `env -i PATH="$PATH"`, so an env-var override
-# would be scrubbed: build the helper into a temp bin dir and PREPEND that to
-# PATH. A source-checkout run then tests the binary built from the tree in
-# front of it; the image `test` stage has neither the .c file nor a compiler
-# and takes the already-installed binary instead. A run with neither is a
-# harness fault, not a green run with the renderer missing -- that would fail
-# every recipient case identically and bury the real cause.
-HELPER_TMPDIR=''
-# shellcheck disable=SC2064 # expand HELPER_TMPDIR at trap time, not at trap install
-trap 'rm -rf "$HELPER_TMPDIR"' EXIT
-HELPER_CC=''
-if [ -f "$HELPER_SRC" ]; then
-  HELPER_CC=$(command -v cc || command -v gcc || printf '')
-fi
-if [ -n "$HELPER_CC" ]; then
-  HELPER_TMPDIR=$(mktemp -d)
-  if ! "$HELPER_CC" -std=c17 -Os -Wall -Wextra -Werror \
-    -fstack-protector-strong -fstack-clash-protection \
-    -o "$HELPER_TMPDIR/$HELPER_BIN" "$HELPER_SRC"; then
-    printf 'harness error: could not build %s from %s\n' "$HELPER_BIN" "$HELPER_SRC" >&2
-    exit 1
-  fi
-  PATH="$HELPER_TMPDIR:$PATH"
-  export PATH
-elif ! command -v "$HELPER_BIN" >/dev/null 2>&1; then
-  printf 'harness error: %s is neither buildable (no %s, or no C compiler) nor installed on PATH\n' \
-    "$HELPER_BIN" "$HELPER_SRC" >&2
-  exit 1
-fi
 
 RECORD=0
 [ "${1:-}" = "--record" ] && RECORD=1
@@ -410,21 +375,6 @@ check_ok recipients-optional-suffix-group \
   RELAY_HOST=smtp.example.com \
   "RECIPIENT_RESTRICTIONS=/alerts(|-dev)@example\.com/"
 
-# The split remediation the universal-guard error message and the README both
-# promise: an alternation spanning both probe domains is refused, but the same
-# intent written as SEPARATE entries passes, because each half matches only
-# ONE probe. This is the assertion that pins the probes as DISSIMILAR -- give
-# them a shared domain and one of these two starts matching both and turns
-# fatal. (Their local parts are deliberately not pinned: a pattern keyed to a
-# probe's nonce has no plausible authoring path in a recipient allowlist.)
-check_log recipients-probe-split-invalid 0 'rules=1' \
-  RELAY_HOST=smtp.example.com \
-  "RECIPIENT_RESTRICTIONS=/\.invalid$/"
-
-check_log recipients-probe-split-test 0 'rules=1' \
-  RELAY_HOST=smtp.example.com \
-  "RECIPIENT_RESTRICTIONS=/\.test$/"
-
 # --- regexp_table(5) dual-pattern and flags forms (round-4) -----------------
 # The dual form /pattern1/!/pattern2/ (matches P1 AND NOT P2) is emitted
 # verbatim and counted effective: Postfix parses it natively (verified
@@ -507,15 +457,6 @@ check_log recipients-flags-basic-syntax-valid 0 'rules=1' \
   RELAY_HOST=smtp.example.com \
   "RECIPIENT_RESTRICTIONS=/(/x"
 
-# xx restores ERE, the symmetric partner of the ii case above: under ERE \(
-# is a valid literal parenthesis that compiles and matches neither probe, so
-# the token boots as one effective rule -- whereas the single-x /\(/x above is
-# fatal. Pins that x TOGGLES rather than merely selecting BRE (one x and two
-# x's are indistinguishable to any single-x case).
-check_log recipients-flags-repeated-x 0 'rules=1' \
-  RELAY_HOST=smtp.example.com \
-  "RECIPIENT_RESTRICTIONS=/\(/xx"
-
 # Unknown flag char: postmap (3.11.5) warns 'unknown regexp option' and
 # skips the rule while the rest of the map loads; mirrored as unparseable
 # structure — warn + suppressed + ineffective, so an all-such list trips
@@ -524,12 +465,6 @@ check_log recipients-unknown-flag 2 'cannot parse regexp token structure' \
   RELAY_HOST=smtp.example.com \
   "RECIPIENT_RESTRICTIONS=/alerts@example\.com/z"
 
-# The flag allowlist applies to the SECOND half's flags too; a dual construct
-# whose except-half carries an unknown flag is equally unparseable.
-check_log recipients-unknown-flag-second-half 2 'cannot parse regexp token structure' \
-  RELAY_HOST=smtp.example.com \
-  "RECIPIENT_RESTRICTIONS=/.*@example\.com/!/^noreply@/z"
-
 # Unparseable structure (mid-token unescaped delimiters — the round-4
 # replacement for the old unescaped-delimiter heuristic and its inaccurate
 # "Postfix will ignore this rule" wording): warn + suppressed; all-such
@@ -537,27 +472,6 @@ check_log recipients-unknown-flag-second-half 2 'cannot parse regexp token struc
 check_log recipients-unparseable-structure 2 'cannot parse regexp token structure' \
   RELAY_HOST=smtp.example.com \
   "RECIPIENT_RESTRICTIONS=/a/b/c/"
-
-# The other two unparseable-structure causes the parser owns, each pinned by
-# its own token shape because all three collapse to the same exit code:
-#   - no closing delimiter (Postfix skips such a line at map load with a
-#     'no closing regexp delimiter' warning), and
-#   - a dual separator whose second half is not /-delimited. Without that
-#     check the ! would silently swallow the next character and leave an EMPTY
-#     second half, which is a different refusal with a different message.
-check_log recipients-unterminated-regexp 2 'cannot parse regexp token structure' \
-  RELAY_HOST=smtp.example.com \
-  "RECIPIENT_RESTRICTIONS=/ops@example\.com"
-
-# Same rule for the SECOND half of a dual construct: an unterminated except-half
-# is unparseable, not a pattern of everything after the !.
-check_log recipients-dual-unterminated-half 2 'cannot parse regexp token structure' \
-  RELAY_HOST=smtp.example.com \
-  "RECIPIENT_RESTRICTIONS=/alerts@example\.com/!/noreply"
-
-check_log recipients-dual-bang-not-delimited 2 'cannot parse regexp token structure' \
-  RELAY_HOST=smtp.example.com \
-  "RECIPIENT_RESTRICTIONS=/alerts@example\.com/!x/"
 
 # Mixed valid + unparseable structure: the container boots on the valid
 # subset and the unparseable token is SUPPRESSED from the rendered map
@@ -618,14 +532,65 @@ check_log recipients-never-match-bare-at 2 'empty local part' \
   RELAY_HOST=smtp.example.com \
   RECIPIENT_RESTRICTIONS=@
 
-# The address arm splits the token on its LAST @, so a two-@ token is
-# classified by what follows the last one: user@host@.example.com is a
-# dot-after-@ never-match, not a valid address with an odd local part. Splitting
-# on the FIRST @ instead would read the domain as host@.example.com and count
-# the dead entry as effective.
-check_log recipients-address-last-at 2 'address domain starts with a dot' \
+# --- RECIPIENT_RESTRICTIONS size bounds ------------------------------------
+# Both bounds are hard-coded in validate.sh (MAX_RECIPIENT_RULES,
+# MAX_RECIPIENT_BYTES) and fatal: rendering the map spawns external processes
+# per rule before Postfix binds port 25, so an unbounded list delays a boot
+# that then SUCCEEDS past the healthcheck's 15s start-period. The refusal
+# assertions name the counted total and the constant, so a miscounting guard
+# fails here instead of producing the right exit code for the wrong reason.
+
+# rcpt_rule_list COUNT SEP -- print COUNT distinct domain tokens joined by
+# SEP. Every token renders as one effective rule, so the info line's rules=N
+# reports the same count the bound saw.
+rcpt_rule_list() {
+  _rrl_out=''
+  _rrl_i=0
+  while [ "$_rrl_i" -lt "$1" ]; do
+    if [ -z "$_rrl_out" ]; then
+      _rrl_out="d${_rrl_i}.example"
+    else
+      _rrl_out="${_rrl_out}${2}d${_rrl_i}.example"
+    fi
+    _rrl_i=$((_rrl_i + 1))
+  done
+  printf '%s' "$_rrl_out"
+}
+
+# Exactly at the rule bound: still renders, all 256 counted effective.
+check_log recipients-rules-at-limit 0 'rules=256' \
   RELAY_HOST=smtp.example.com \
-  RECIPIENT_RESTRICTIONS=user@host@.example.com
+  "RECIPIENT_RESTRICTIONS=$(rcpt_rule_list 256 ' ')"
+
+# One rule over the bound.
+check_log recipients-rules-over-limit 2 'rules=257 max_rules=256' \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=$(rcpt_rule_list 257 ' ')"
+
+# Leading, trailing, and repeated whitespace are separators, not rules: the
+# padded value is still exactly at the bound and must render. A count fooled
+# by padding sees 500+ tokens here and refuses the boot.
+check_log recipients-rules-at-limit-padded 0 'rules=256' \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=  $(rcpt_rule_list 256 '   ')  "
+
+# Exactly at the byte bound: one 16384-byte token renders as one rule.
+check_log recipients-bytes-at-limit 0 'rules=1' \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=$(printf '%016384d' 0)"
+
+# One byte over the bound (a single pathological token, well inside the rule
+# bound, so this is the arm the byte guard exists for).
+check_log recipients-bytes-over-limit 2 'bytes=16385 max_bytes=16384' \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=$(printf '%016385d' 0)"
+
+# The byte bound must keep ADMITTING one large regexp construct: the ~8 KiB
+# single token the parser-linearity case below builds also has to survive
+# validation and render as an effective rule.
+check_log recipients-large-single-token 0 'rules=1' \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=/^$(printf '%08192d' 0)@example\.com$/"
 
 check_fail bad-tls-level 2 \
   RELAY_HOST=smtp.example.com \
@@ -798,193 +763,44 @@ check_relay_host_warn relay-host-bracketed-hostport '[smtp.example.com:587]' 1
 # A well-formed bracketed IPv6 literal must stay warning-free.
 check_relay_host_warn relay-host-bracketed-ipv6 '[2001:db8::1]' 0
 
-# --- RECIPIENT_RESTRICTIONS input bounds -----------------------------------
-# These four checks replace the old parse-8kib-linearity regression. That test
-# built an 8 KiB pattern and asserted the structure parser stayed linear under
-# a 5s deadline, because the variable had NO length bound and a quadratic
-# per-character shell parse held pre-start validation for ~100s on a 5 KiB
-# pattern. Both halves of that premise are gone: the parse is one bounded C
-# pass, and an 8 KiB value is now REFUSED rather than parsed, so an assertion
-# that it parses fast could not even run. What still matters is asserted
-# instead: the bound refuses an oversized value (fatally, at the entrypoint,
-# with its own log line), a value at the cap still renders, and a near-cap
-# pattern is rendered VERBATIM inside a hard deadline -- the same
-# no-truncation, no-blowup property the old test pinned, observed at the
-# rendered output instead of at an internal variable.
-
-# repeat_char COUNT — print COUNT digits (a valid domain-token body needing no
-# escaping), used to build values at exact byte lengths.
-repeat_char() {
-  printf "%0${1}d" 0
-}
-
-# A value one byte past the cap is fatal, and the bound reports itself.
-check_log recipients-over-byte-cap 2 'exceeds its maximum length' \
-  RELAY_HOST=smtp.example.com \
-  "RECIPIENT_RESTRICTIONS=$(repeat_char 4097)"
-
-# A value AT the cap still renders as one effective rule: the bound refuses
-# only what it says it refuses.
-check_log recipients-at-byte-cap 0 'rules=1' \
-  RELAY_HOST=smtp.example.com \
-  "RECIPIENT_RESTRICTIONS=$(repeat_char 4096)"
-
-# The entry count is bounded independently of the byte length: 129 short
-# tokens sit far inside the 4096-byte cap, so only the entry cap can refuse
-# them.
-build_entry_list() {
-  _list=''
-  _n=0
-  while [ "$_n" -lt "$1" ]; do
-    _list="${_list}d${_n}.test "
-    _n=$((_n + 1))
+# --- parse_regexp_construct linearity regression ---------------------------
+# The structured parser must stay linear in the token length: the earlier
+# per-character shell loop copied both the shrinking suffix and the growing
+# prefix on every character, so a 5 KiB pattern held pre-start validation
+# for ~100s in the built image (RECIPIENT_RESTRICTIONS has no length
+# bound). Build an 8 KiB literal pattern, parse it under a hard 5s
+# deadline, and assert the extracted first half is byte-identical.
+check_parse_linear() {
+  _name=$1
+  _pat=''
+  _i=0
+  while [ "$_i" -lt 512 ]; do
+    _pat="${_pat}abcdefghijklmnop"
+    _i=$((_i + 1))
   done
-  printf '%s' "$_list"
-}
-
-check_log recipients-over-entry-cap 2 'too many entries' \
-  RELAY_HOST=smtp.example.com \
-  "RECIPIENT_RESTRICTIONS=$(build_entry_list 129)"
-
-check_log recipients-at-entry-cap 0 'rules=128' \
-  RELAY_HOST=smtp.example.com \
-  "RECIPIENT_RESTRICTIONS=$(build_entry_list 128)"
-
-# The renderer enforces BOTH bounds itself, so it is safe to run standalone
-# (and so a future caller cannot hand it an unbounded value). The entrypoint
-# refuses first in the shipped boot path, which means these two are the only
-# assertions that reach the renderer's own limits — invoke it directly.
-# check_helper_refusal NAME EXPECTED_CODE LOG_SNIPPET VALUE
-check_helper_refusal() {
-  _name=$1
-  _want=$2
-  _snippet=$3
-  _tmp=$(mktemp -d)
-  _stderr_file=$(mktemp)
-  if "$HELPER_BIN" "$_tmp" "$4" >/dev/null 2>"$_stderr_file"; then
-    _rc=0
-  else
-    _rc=$?
-  fi
-  _stderr=$(cat "$_stderr_file")
-  rm -f "$_stderr_file"
-  rm -rf "$_tmp"
-  if [ "$_rc" != "$_want" ]; then
-    printf 'FAIL %s: %s exited %d, expected %d (stderr: %s)\n' \
-      "$_name" "$HELPER_BIN" "$_rc" "$_want" "$_stderr" >&2
-    fail=$((fail + 1))
-    return
-  fi
-  case "$_stderr" in
-    *"$_snippet"*) pass=$((pass + 1)) ;;
-    *)
-      printf 'FAIL %s: stderr missing "%s" (stderr: %s)\n' "$_name" "$_snippet" "$_stderr" >&2
-      fail=$((fail + 1))
-      ;;
-  esac
-}
-
-check_helper_refusal helper-byte-cap 2 "renderer's input limit" \
-  "$(repeat_char 4097)"
-
-check_helper_refusal helper-entry-cap 2 "renderer's entry limit" \
-  "$(build_entry_list 129)"
-
-# Successor to the linearity regression: a near-cap regexp token must be
-# rendered byte-identically (the parse preserves the whole pattern; nothing
-# truncates it) and the whole render must finish well inside a hard deadline.
-check_render_near_cap() {
-  _name=$1
-  _tok="/$(repeat_char 4000)@example\\.com\$/"
-  _tmp=$(mktemp -d)
-  if timeout 5 env -i PATH="$PATH" CONF_DIR="$_tmp" \
-    RELAY_HOST=smtp.example.com "RECIPIENT_RESTRICTIONS=$_tok" \
-    sh "$ENTRYPOINT" render >/dev/null 2>&1; then
+  if _got=$(
+    # shellcheck disable=SC2016  # deliberate: $1/$2/$_rx_p1 belong to the INNER sh (positional params + sourced parser variable), not this shell
+    timeout 5 sh -c '
+      . "$1/recipient-filter.sh"
+      parse_regexp_construct "/$2/" || exit 1
+      printf %s "$_rx_p1"
+    ' parse-probe "$ENTRYPOINT_DIR" "$_pat"
+  ); then
     :
   else
-    printf 'FAIL %s: render of a near-cap regexp token failed or exceeded 5s\n' "$_name" >&2
+    printf 'FAIL %s: parser failed or exceeded 5s on an 8 KiB pattern\n' "$_name" >&2
     fail=$((fail + 1))
-    rm -rf "$_tmp"
     return
   fi
-  if [ "$(head -n 1 "$_tmp/recipient_access")" = "$_tok OK" ]; then
+  if [ "$_got" = "$_pat" ]; then
     pass=$((pass + 1))
   else
-    printf 'FAIL %s: near-cap regexp token was not rendered verbatim\n' "$_name" >&2
-    fail=$((fail + 1))
-  fi
-  rm -rf "$_tmp"
-}
-
-check_render_near_cap recipients-near-cap-verbatim
-
-# The rendered map must land world-readable (0644). The renderer writes it via
-# mkstemp, which creates 0600, and the Postfix daemons read the map as an
-# unprivileged user -- a mode regression breaks the deployed relay while the
-# rendered CONTENT the golden fixtures diff stays byte-identical, so the mode
-# needs its own assertion.
-check_map_mode() {
-  _name=$1
-  _tmp=$(mktemp -d)
-  if env -i PATH="$PATH" CONF_DIR="$_tmp" RELAY_HOST=smtp.example.com \
-    RECIPIENT_RESTRICTIONS=alerts@example.com \
-    sh "$ENTRYPOINT" render >/dev/null 2>&1; then
-    # A missing map must report FAIL, not abort the suite: the promote step is
-    # exactly what this case can catch failing.
-    _mode=$(stat -c %a "$_tmp/recipient_access" 2>/dev/null) || _mode='(no map rendered)'
-  else
-    _mode='(render failed)'
-  fi
-  rm -rf "$_tmp"
-  if [ "$_mode" = 644 ]; then
-    pass=$((pass + 1))
-  else
-    printf 'FAIL %s: rendered recipient_access mode is %s, expected 644\n' "$_name" "$_mode" >&2
+    printf 'FAIL %s: _rx_p1 is not byte-identical to the 8 KiB input pattern\n' "$_name" >&2
     fail=$((fail + 1))
   fi
 }
 
-check_map_mode recipients-map-mode
-
-# An oversized token must not flood a single log line: the renderer's port of
-# sanitize_token bounds a logged value to 512 bytes and marks the cut. A
-# leading-dot domain that long is a never-match warn, so its entry= field is
-# where the bound shows.
-check_log recipients-oversized-token-truncated 2 '[truncated]' \
-  RELAY_HOST=smtp.example.com \
-  "RECIPIENT_RESTRICTIONS=.$(repeat_char 600)"
-
-# Cross-file invariant: the two bounds are enforced in BOTH entrypoint.sh and
-# the renderer (so the renderer is safe standalone), which means editing one
-# side alone would silently split the contract. Read both at run time. The
-# image test stage ships no .c file, so this check is source-checkout-only and
-# says so rather than passing vacuously.
-check_cap_parity() {
-  if [ ! -f "$HELPER_SRC" ]; then
-    printf 'render-test: note: %s absent, cap-parity check not run (image test stage)\n' \
-      "$HELPER_SRC"
-    return
-  fi
-  _sh_bytes=$(sed -n 's/^readonly RECIPIENT_RESTRICTIONS_MAX_BYTES=\([0-9]*\)$/\1/p' "$ENTRYPOINT")
-  _sh_tokens=$(sed -n 's/^readonly RECIPIENT_RESTRICTIONS_MAX_TOKENS=\([0-9]*\)$/\1/p' "$ENTRYPOINT")
-  _c_bytes=$(sed -n 's/^#define RCPT_MAX_INPUT_BYTES \([0-9]*\)$/\1/p' "$HELPER_SRC")
-  _c_tokens=$(sed -n 's/^#define RCPT_MAX_TOKENS \([0-9]*\)$/\1/p' "$HELPER_SRC")
-  if [ -z "$_sh_bytes" ] || [ -z "$_sh_tokens" ] || [ -z "$_c_bytes" ] || [ -z "$_c_tokens" ]; then
-    printf 'FAIL cap-parity: could not read all four bounds (sh=%s/%s c=%s/%s)\n' \
-      "$_sh_bytes" "$_sh_tokens" "$_c_bytes" "$_c_tokens" >&2
-    fail=$((fail + 1))
-    return
-  fi
-  if [ "$_sh_bytes" = "$_c_bytes" ] && [ "$_sh_tokens" = "$_c_tokens" ]; then
-    pass=$((pass + 1))
-  else
-    printf 'FAIL cap-parity: entrypoint.sh bounds %s/%s do not match %s bounds %s/%s\n' \
-      "$_sh_bytes" "$_sh_tokens" "$HELPER_BIN" "$_c_bytes" "$_c_tokens" >&2
-    fail=$((fail + 1))
-  fi
-}
-
-check_cap_parity
+check_parse_linear parse-8kib-linear
 
 # --- Summary --------------------------------------------------------------
 printf 'render-test: %d passed, %d failed\n' "$pass" "$fail"

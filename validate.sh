@@ -54,8 +54,13 @@ validate_no_newlines() {
 #     leading-bracket RELAY_HOST defects), and the fingerprint-family
 #     checks (both-or-neither with level=fingerprint; per-token
 #     colon-separated-hex-pairs format with digest-matching pair count;
-#     sha256/sha512 digest allowlist). This set is CLOSED: each entry
-#     was an explicit user decision; new entries require the same.
+#     sha256/sha512 digest allowlist), and the RECIPIENT_RESTRICTIONS size
+#     bounds (max rules, max bytes: rendering costs external processes per
+#     rule before Postfix binds port 25, so a list past the bound delays a
+#     succeeding boot past the healthcheck start-period; hard-coded and
+#     deliberately not tunable -- the alternative for a list that big is a
+#     mounted Postfix table or a policy service). This set is CLOSED: each
+#     entry was an explicit user decision; new entries require the same.
 #   Tier 3 (operator's responsibility): syntactically-plausible but
 #     semantically-wrong values beyond those tiers (typo'd hostnames,
 #     host:port confusion, exotic never-matching shapes). The validator does
@@ -130,23 +135,6 @@ validate_no_metacharacters() {
   esac
 }
 
-# validate_max_bytes VAR_NAME VALUE MAX -- reject a value longer than MAX
-# bytes. The generic spec table in entrypoint.sh spells this as a
-# `maxbytes=N` check. An input bound is not decoration for a value the
-# entrypoint hands to a bounded renderer: the renderer refuses an oversized
-# input by contract, so the bound belongs here, where every other env-var
-# constraint is enforced and reported. `${#var}` counts bytes in the POSIX
-# shells this image runs (dash on the test host, BusyBox ash in the image);
-# the consuming helper re-checks the byte length itself, so a multibyte value
-# can never slip past both.
-validate_max_bytes() {
-  if [ "${#2}" -gt "$3" ]; then
-    printf 'level=error msg="env var exceeds its maximum length" var=%s length=%d max_bytes=%s\n' \
-      "$1" "${#2}" "$3" >&2
-    return 1
-  fi
-}
-
 # Validate that a numeric value falls within [min, max].
 # Usage: validate_range VAR_NAME VALUE MIN MAX
 # Precondition: VALUE has already passed validate_numeric. The spec table in
@@ -159,6 +147,71 @@ validate_max_bytes() {
 validate_range() {
   if [ "$2" -lt "$3" ] || [ "$2" -gt "$4" ]; then
     printf 'level=error msg="env var out of range" var=%s value="%s" min=%s max=%s\n' "$1" "$2" "$3" "$4" >&2
+    return 1
+  fi
+}
+
+# Size bounds for RECIPIENT_RESTRICTIONS. Hard-coded, with no env-var
+# override on purpose: a deployment that genuinely needs thousands of rules
+# needs a Postfix table or a policy service, not a bigger knob.
+# Rendering the recipient map spawns external processes PER RULE -- a sed
+# escape for a literal, an awk structure parse plus grep compile/match
+# probes for a regexp construct -- on the startup path, before Postfix binds
+# port 25 and under no deadline of its own. Measured on this host: ~1.4ms
+# per plain rule, ~4.3ms per regexp rule, linear in the rule count. The
+# container healthcheck's start-period is 15s, so an unbounded list delays a
+# boot that then SUCCEEDS past the point monitoring would notice it. 256
+# rules is ~1.1s at the regexp rate, an order of magnitude inside that
+# budget, and the rule count is the real bound because the cost scales per
+# rule.
+readonly MAX_RECIPIENT_RULES=256
+# The looser second bound, against the shape a rule count cannot see: one
+# pathological giant token. Wide enough to keep admitting a single ~8 KiB
+# regexp construct (tests/render-test.sh pins that shape), which is already
+# far past any hand-written pattern.
+readonly MAX_RECIPIENT_BYTES=16384
+
+# validate_recipient_rule_count VAR VALUE -- upper bound on how many rules
+# RECIPIENT_RESTRICTIONS may carry (MAX_RECIPIENT_RULES above). Counts the
+# whitespace-separated tokens the renderer itself will iterate: default-IFS
+# field splitting collapses runs of whitespace and ignores leading and
+# trailing whitespace, so padding or a repeated separator cannot inflate the
+# count. Same `set -f` premise as validate_no_open_relay's loop (entrypoint.sh
+# disables pathname expansion, so a glob metacharacter in a token stays one
+# token instead of expanding to file names).
+# Upper bound ONLY: a zero-token value belongs to the zero-effective-rules
+# guard in recipient-filter.sh, which already names the whitespace-only case,
+# so this check must not pre-empt it with a vaguer message.
+validate_recipient_rule_count() {
+  # Copy the var name up front: the count below repurposes the positional
+  # parameters via `set --` (same idiom as validate_fingerprint_match).
+  _rr_var=$1
+  # shellcheck disable=SC2086
+  set -- $2
+  if [ $# -gt "$MAX_RECIPIENT_RULES" ]; then
+    printf 'level=error msg="RECIPIENT_RESTRICTIONS has too many rules; every rule is rendered and probed with external processes before Postfix binds port 25, so a longer list delays startup past the healthcheck start-period (mount your own Postfix recipient table as a check_recipient_access map, or run a policy service, instead of listing that many rules here)" var=%s rules=%d max_rules=%d\n' \
+      "$_rr_var" "$#" "$MAX_RECIPIENT_RULES" >&2
+    return 1
+  fi
+}
+
+# validate_recipient_byte_length VAR VALUE -- upper bound on the whole
+# value's byte length (MAX_RECIPIENT_BYTES above), the looser guard against
+# one giant token the rule count cannot see. The spec table orders the rule
+# count first: a list that breaks both bounds is a rule-count problem, and
+# that message is the actionable one.
+# wc -c, not ${#VALUE}: the shells that actually run this disagree on what
+# ${#} means for a multibyte value (BusyBox ash built with unicode support
+# reports characters, dash reports bytes), and the bound is about the bytes
+# the renderer and Postfix handle. Arithmetic expansion normalizes the
+# count, which some wc implementations pad with blanks, into a bare integer
+# for both the comparison and the log field.
+validate_recipient_byte_length() {
+  _rr_bytes=$(printf '%s' "$2" | wc -c)
+  _rr_bytes=$((_rr_bytes))
+  if [ "$_rr_bytes" -gt "$MAX_RECIPIENT_BYTES" ]; then
+    printf 'level=error msg="RECIPIENT_RESTRICTIONS is too long; the whole value is rendered and probed before Postfix binds port 25, so an oversized value delays startup past the healthcheck start-period (mount your own Postfix recipient table as a check_recipient_access map, or run a policy service, instead of one oversized value)" var=%s bytes=%d max_bytes=%d\n' \
+      "$1" "$_rr_bytes" "$MAX_RECIPIENT_BYTES" >&2
     return 1
   fi
 }
@@ -544,29 +597,4 @@ validate_sasl_password() {
       return 1
       ;;
   esac
-}
-
-# validate_recipient_entry_count VALUE MAX -- reject a RECIPIENT_RESTRICTIONS
-# list with more than MAX entries. The byte bound above cannot bound the entry
-# count (a 4 KiB value can still carry a thousand two-byte tokens) and the
-# renderer's single pass is bounded by BOTH, so both are enforced here.
-# `set --` inside a function scopes the positional parameters to this call
-# (same idiom as validate_fingerprint_match), which is why MAX is copied
-# first; pathname expansion is already off (set -f in entrypoint.sh), so a
-# glob metacharacter in an entry cannot expand here.
-validate_recipient_entry_count() {
-  _rec_max=$2
-  _oldIFS=$IFS
-  # Unset IFS to get the shell's DEFAULT field splitting (space, tab, newline)
-  # -- the exact delimiter set the renderer's tokenizer uses, so the count
-  # reported here is the count it will see.
-  unset IFS
-  # shellcheck disable=SC2086 # deliberate word splitting: entries are whitespace-separated
-  set -- $1
-  IFS=$_oldIFS
-  if [ $# -gt "$_rec_max" ]; then
-    printf 'level=error msg="RECIPIENT_RESTRICTIONS has too many entries; the recipient map is rendered in one bounded pass" var=RECIPIENT_RESTRICTIONS entries=%d max_entries=%s\n' \
-      "$#" "$_rec_max" >&2
-    return 1
-  fi
 }

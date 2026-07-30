@@ -4,6 +4,5 @@
 !entrypoint.sh
 !validate.sh
 !recipient-filter.sh
-!smtp-recipient-render.c
 !tests/
 !tests/**
