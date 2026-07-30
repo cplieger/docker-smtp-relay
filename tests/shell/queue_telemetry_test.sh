@@ -67,7 +67,7 @@ REAL_TIMEOUT=$(command -v timeout) || {
 cat >"$SHIM/timeout" <<SHIMEOF
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >>"\$TIMEOUT_ARGV"
-exec $REAL_TIMEOUT "\$@"
+exec "$REAL_TIMEOUT" "\$@"
 SHIMEOF
 chmod +x "$SHIM/timeout"
 
