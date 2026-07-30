@@ -70,7 +70,7 @@ services:
 | `SMTPD_TLS_SECURITY_LEVEL` | Inbound TLS level: `may` (opportunistic; STARTTLS offered, cleartext still accepted) or `encrypt` (require TLS from every sender). Only meaningful with the cert/key pair set; setting it without the pair is rejected. | `may` when certs set | No |
 | `MESSAGE_SIZE_LIMIT` | Maximum message size in bytes (default 10240000 = 10 MB, AWS SES supports up to 40 MB with limit increase) | `10240000` | No |
 | `ACCEPTED_NETWORKS` | Space-separated CIDRs allowed to send mail through this relay. If unset, the entrypoint defaults to all RFC 1918 ranges (`192.168.0.0/16 172.16.0.0/12 10.0.0.0/8`); the shipped compose example deliberately narrows this to `192.168.0.0/16`. | `192.168.0.0/16 172.16.0.0/12 10.0.0.0/8` | No |
-| `RECIPIENT_RESTRICTIONS` | Optional recipient allowlist: space-separated address, domain, and Postfix regexp tokens (including `/pattern/flags` and `/pattern1/!/pattern2/` forms). If set, only matching recipients are accepted; leave empty to allow all. Bounded at 256 rules and 16384 bytes — for a bigger allowlist, mount your own Postfix table as a `check_recipient_access` map or run a policy service. Misconfigurations fail the boot loudly; see [Recipient filtering](#recipient-filtering) below. | _(unset)_ | No |
+| `RECIPIENT_RESTRICTIONS` | Optional recipient allowlist: space-separated address, domain, and Postfix regexp tokens (including `/pattern/flags` and `/pattern1/!/pattern2/` forms). If set, only matching recipients are accepted; leave empty to allow all. Bounded at 256 rules and 16384 bytes — neither is tunable, and a bigger allowlist needs a Postfix deployment of your own with a `check_recipient_access` table or a policy service. Misconfigurations fail the boot loudly; see [Recipient filtering](#recipient-filtering) below. | _(unset)_ | No |
 | `SMTP_HOSTNAME` | Postfix `myhostname` / HELO identity. Use an FQDN; some receiving MTAs reject non-FQDN HELO names. Validation rejects whitespace and shell metacharacters; it does not enforce FQDN shape. | `smtp-relay.local` | No |
 | `STARTUP_PROBE` | Run a fail-soft TCP reachability check against the upstream relay at startup; see [Observability](#observability). `true` or `false`. | `true` | No |
 | `STARTUP_PROBE_TIMEOUT` | Timeout in seconds for the startup reachability probe (1-10; kept under the 15s healthcheck start-period so a slow probe never delays readiness). | `5` | No |
@@ -189,11 +189,14 @@ way.
   Leave `RECIPIENT_RESTRICTIONS` empty when allow-all is what you want.
 - **Too large: exit 2.** At most 256 rules, and at most 16384 bytes in the
   whole value. Every rule is rendered and probed with external processes
-  before Postfix binds port 25, so a longer list delays startup past the
-  healthcheck's 15s start-period on a boot that then succeeds. Neither limit
-  is tunable: if you need a bigger allowlist, mount your own Postfix table
-  and point `check_recipient_access` at it, or move the decision to a
-  [policy service](https://www.postfix.org/SMTPD_POLICY_README.html). A
+  before Postfix binds port 25, so the count and length are capped at a fixed
+  budget that keeps that work an order of magnitude inside the healthcheck's
+  15s start-period; the caps bound the startup work, they are not the point
+  where a boot actually misses the deadline. Neither limit is tunable, and
+  this image renders `smtpd_recipient_restrictions` itself with no setting to
+  point it elsewhere: a bigger allowlist needs a Postfix deployment of your
+  own, with your table behind `check_recipient_access` or the decision moved
+  to a [policy service](https://www.postfix.org/SMTPD_POLICY_README.html). A
   single regexp token of a few KiB is fine.
 
 ### Volumes

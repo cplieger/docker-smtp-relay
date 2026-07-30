@@ -152,8 +152,10 @@ validate_range() {
 }
 
 # Size bounds for RECIPIENT_RESTRICTIONS. Hard-coded, with no env-var
-# override on purpose: a deployment that genuinely needs thousands of rules
-# needs a Postfix table or a policy service, not a bigger knob.
+# override on purpose: this image renders smtpd_recipient_restrictions itself
+# and exposes no access-map or policy-service setting, so a deployment that
+# genuinely needs thousands of rules needs a Postfix deployment of its own
+# with a table or a policy service, not a bigger knob here.
 # Rendering the recipient map spawns external processes PER RULE -- a sed
 # escape for a literal, an awk structure parse plus grep compile/match
 # probes for a regexp construct -- on the startup path, before Postfix binds
@@ -162,7 +164,9 @@ validate_range() {
 # container healthcheck's start-period is 15s, so an unbounded list delays a
 # boot that then SUCCEEDS past the point monitoring would notice it. 256
 # rules is ~1.1s at the regexp rate, an order of magnitude inside that
-# budget, and the rule count is the real bound because the cost scales per
+# budget: the cap is a conservative fixed budget, NOT the measured point
+# where a boot actually misses the start-period (that is thousands of
+# rules), and the rule count is the real bound because the cost scales per
 # rule.
 readonly MAX_RECIPIENT_RULES=256
 # The looser second bound, against the shape a rule count cannot see: one
@@ -189,7 +193,7 @@ validate_recipient_rule_count() {
   # shellcheck disable=SC2086
   set -- $2
   if [ $# -gt "$MAX_RECIPIENT_RULES" ]; then
-    printf 'level=error msg="RECIPIENT_RESTRICTIONS has too many rules; every rule is rendered and probed with external processes before Postfix binds port 25, so a longer list delays startup past the healthcheck start-period (mount your own Postfix recipient table as a check_recipient_access map, or run a policy service, instead of listing that many rules here)" var=%s rules=%d max_rules=%d\n' \
+    printf 'level=error msg="RECIPIENT_RESTRICTIONS has more rules than this image renders at startup; every rule costs external processes (sed, awk, grep probes) before Postfix binds port 25, so the count is capped at a fixed budget deliberately set an order of magnitude inside the healthcheck start-period rather than measured per boot (this image renders smtpd_recipient_restrictions itself and exposes no access-map or policy-service setting, so a larger allowlist needs a Postfix deployment of your own configured with a check_recipient_access table or a policy service)" var=%s rules=%d max_rules=%d\n' \
       "$_rr_var" "$#" "$MAX_RECIPIENT_RULES" >&2
     return 1
   fi
@@ -207,11 +211,26 @@ validate_recipient_rule_count() {
 # count, which some wc implementations pad with blanks, into a bare integer
 # for both the comparison and the log field.
 validate_recipient_byte_length() {
-  _rr_bytes=$(printf '%s' "$2" | wc -c)
+  # Upper bound on a value that carries rules, like the rule count above:
+  # a value that field-splits to ZERO tokens carries none however long its
+  # padding is, and that case belongs to the zero-effective-rules guard in
+  # recipient-filter.sh, which names it precisely ("whitespace only, or every
+  # entry malformed..."). Refusing 16 KiB of spaces here as "too long" would
+  # pre-empt that message with a vaguer one. Same copy-then-`set --` idiom and
+  # same default-IFS/`set -f` premise as validate_recipient_rule_count, so the
+  # split matches the renderer's own iteration.
+  _rr_var=$1
+  _rr_value=$2
+  # shellcheck disable=SC2086
+  set -- $_rr_value
+  if [ $# -eq 0 ]; then
+    return 0
+  fi
+  _rr_bytes=$(printf '%s' "$_rr_value" | wc -c)
   _rr_bytes=$((_rr_bytes))
   if [ "$_rr_bytes" -gt "$MAX_RECIPIENT_BYTES" ]; then
-    printf 'level=error msg="RECIPIENT_RESTRICTIONS is too long; the whole value is rendered and probed before Postfix binds port 25, so an oversized value delays startup past the healthcheck start-period (mount your own Postfix recipient table as a check_recipient_access map, or run a policy service, instead of one oversized value)" var=%s bytes=%d max_bytes=%d\n' \
-      "$1" "$_rr_bytes" "$MAX_RECIPIENT_BYTES" >&2
+    printf 'level=error msg="RECIPIENT_RESTRICTIONS is longer than this image renders at startup; the whole value is parsed and probed before Postfix binds port 25, so its length is capped at a fixed budget rather than measured per boot (this image renders smtpd_recipient_restrictions itself and exposes no access-map or policy-service setting, so a larger allowlist needs a Postfix deployment of your own configured with a check_recipient_access table or a policy service)" var=%s bytes=%d max_bytes=%d\n' \
+      "$_rr_var" "$_rr_bytes" "$MAX_RECIPIENT_BYTES" >&2
     return 1
   fi
 }

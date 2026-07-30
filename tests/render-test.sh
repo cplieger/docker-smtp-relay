@@ -535,10 +535,11 @@ check_log recipients-never-match-bare-at 2 'empty local part' \
 # --- RECIPIENT_RESTRICTIONS size bounds ------------------------------------
 # Both bounds are hard-coded in validate.sh (MAX_RECIPIENT_RULES,
 # MAX_RECIPIENT_BYTES) and fatal: rendering the map spawns external processes
-# per rule before Postfix binds port 25, so an unbounded list delays a boot
-# that then SUCCEEDS past the healthcheck's 15s start-period. The refusal
-# assertions name the counted total and the constant, so a miscounting guard
-# fails here instead of producing the right exit code for the wrong reason.
+# per rule before Postfix binds port 25, so the count and length are capped at
+# a fixed budget kept an order of magnitude inside the healthcheck's 15s
+# start-period rather than measured per boot. The refusal assertions name the
+# counted total and the constant, so a miscounting guard fails here instead of
+# producing the right exit code for the wrong reason.
 
 # rcpt_rule_list COUNT SEP -- print COUNT distinct domain tokens joined by
 # SEP. Every token renders as one effective rule, so the info line's rules=N
@@ -584,6 +585,13 @@ check_log recipients-bytes-at-limit 0 'rules=1' \
 check_log recipients-bytes-over-limit 2 'bytes=16385 max_bytes=16384' \
   RELAY_HOST=smtp.example.com \
   "RECIPIENT_RESTRICTIONS=$(printf '%016385d' 0)"
+
+# Padding alone is not length the byte bound owns: a value well over 16384
+# bytes that field-splits to zero tokens must still reach the more specific
+# zero-effective-rules refusal instead of being refused as "too long".
+check_log recipients-bytes-over-limit-whitespace-only 2 'parsed zero effective rules' \
+  RELAY_HOST=smtp.example.com \
+  "RECIPIENT_RESTRICTIONS=$(printf '%16385s' '')"
 
 # The byte bound must keep ADMITTING one large regexp construct: the ~8 KiB
 # single token the parser-linearity case below builds also has to survive
