@@ -130,6 +130,23 @@ validate_no_metacharacters() {
   esac
 }
 
+# validate_max_bytes VAR_NAME VALUE MAX -- reject a value longer than MAX
+# bytes. The generic spec table in entrypoint.sh spells this as a
+# `maxbytes=N` check. An input bound is not decoration for a value the
+# entrypoint hands to a bounded renderer: the renderer refuses an oversized
+# input by contract, so the bound belongs here, where every other env-var
+# constraint is enforced and reported. `${#var}` counts bytes in the POSIX
+# shells this image runs (dash on the test host, BusyBox ash in the image);
+# the consuming helper re-checks the byte length itself, so a multibyte value
+# can never slip past both.
+validate_max_bytes() {
+  if [ "${#2}" -gt "$3" ]; then
+    printf 'level=error msg="env var exceeds its maximum length" var=%s length=%d max_bytes=%s\n' \
+      "$1" "${#2}" "$3" >&2
+    return 1
+  fi
+}
+
 # Validate that a numeric value falls within [min, max].
 # Usage: validate_range VAR_NAME VALUE MIN MAX
 # Precondition: VALUE has already passed validate_numeric. The spec table in
@@ -527,4 +544,29 @@ validate_sasl_password() {
       return 1
       ;;
   esac
+}
+
+# validate_recipient_entry_count VALUE MAX -- reject a RECIPIENT_RESTRICTIONS
+# list with more than MAX entries. The byte bound above cannot bound the entry
+# count (a 4 KiB value can still carry a thousand two-byte tokens) and the
+# renderer's single pass is bounded by BOTH, so both are enforced here.
+# `set --` inside a function scopes the positional parameters to this call
+# (same idiom as validate_fingerprint_match), which is why MAX is copied
+# first; pathname expansion is already off (set -f in entrypoint.sh), so a
+# glob metacharacter in an entry cannot expand here.
+validate_recipient_entry_count() {
+  _rec_max=$2
+  _oldIFS=$IFS
+  # Unset IFS to get the shell's DEFAULT field splitting (space, tab, newline)
+  # -- the exact delimiter set the renderer's tokenizer uses, so the count
+  # reported here is the count it will see.
+  unset IFS
+  # shellcheck disable=SC2086 # deliberate word splitting: entries are whitespace-separated
+  set -- $1
+  IFS=$_oldIFS
+  if [ $# -gt "$_rec_max" ]; then
+    printf 'level=error msg="RECIPIENT_RESTRICTIONS has too many entries; the recipient map is rendered in one bounded pass" var=RECIPIENT_RESTRICTIONS entries=%d max_entries=%s\n' \
+      "$#" "$_rec_max" >&2
+    return 1
+  fi
 }

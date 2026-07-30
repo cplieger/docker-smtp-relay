@@ -247,6 +247,47 @@ RUN { wget --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz" \
         >/out/usr/share/sbom/postfix.cdx.json
 
 # ---------------------------------------------------------------------------
+# Renderer builder stage - compiles smtp-recipient-render, the single-pass C
+# helper that renders $CONF_DIR/recipient_access from RECIPIENT_RESTRICTIONS
+# (see smtp-recipient-render.c's header for why the per-rule shell loop it
+# replaced was worth removing from the pre-start path). Plain gcc, no
+# cross-compilation plumbing: each platform builds on its own native runner.
+# Only the binary is staged out; build-base is discarded with this stage, so
+# the runtime image gains no toolchain. The build-time smoke assertions are
+# fail-closed in the same style as the Postfix source seds above: prove the
+# helper renders a literal correctly and still REFUSES a possibly-allow-all
+# pattern with exit 2, so a broken build (or a broken per-arch build) fails
+# here rather than at the golden tests or, worse, at boot.
+# ---------------------------------------------------------------------------
+FROM alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b AS renderer-builder
+
+SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
+
+# Build-only, discarded with this stage; unpinned per the repo's apk policy
+# (the base digest is the reproducibility guarantee).
+# hadolint ignore=DL3018
+RUN apk add --no-cache build-base
+
+WORKDIR /build
+COPY smtp-recipient-render.c ./
+RUN gcc -std=c17 -Os -Wall -Wextra -Werror \
+        -fstack-clash-protection -fstack-protector-strong \
+        -Wformat -Werror=format-security \
+        -Wl,-z,relro,-z,now \
+        -o smtp-recipient-render smtp-recipient-render.c \
+    && mkdir -p /tmp/smoke \
+    && ./smtp-recipient-render /tmp/smoke 'ops@example.com /^alerts@example\.net$/' \
+    && { test "$(head -n 1 /tmp/smoke/recipient_access)" = '/^ops@example\.com$/ OK' \
+      || { printf '%s\n' 'FAIL: smtp-recipient-render did not render an escaped anchored address literal' >&2; exit 1; }; } \
+    && { test "$(tail -n 1 /tmp/smoke/recipient_access)" = '/.*/ REJECT' \
+      || { printf '%s\n' 'FAIL: smtp-recipient-render did not emit the /.*/ REJECT terminator' >&2; exit 1; }; } \
+    && rc=0 \
+    && { ./smtp-recipient-render /tmp/smoke '/.*/' 2>/dev/null || rc=$?; } \
+    && { test "$rc" -eq 2 \
+      || { printf 'FAIL: smtp-recipient-render exited %s for a possibly-allow-all pattern (want 2)\n' "$rc" >&2; exit 1; }; } \
+    && rm -rf /tmp/smoke
+
+# ---------------------------------------------------------------------------
 # Runtime base stage - digest-pinned base plus unpinned runtime libraries,
 # with the staged Postfix installation copied from the builder (daemons,
 # tools, shared libs, /etc/postfix defaults, spool/data skeletons; manpages
@@ -289,6 +330,13 @@ COPY --from=builder /out/var/spool/postfix/ /var/spool/postfix/
 # Syft's sbom-cataloger can identify the source-built Postfix version.
 COPY --from=builder /out/usr/share/sbom/ /usr/share/sbom/
 
+# The recipient_access renderer. It lands in the shared base rather than in
+# `test` and `final` separately (the way the shell files do) so the stage that
+# RUNS the golden tests and the stage that SHIPS can never disagree about
+# which renderer is installed: recipient-filter.sh resolves it on PATH, and a
+# runtime image missing it would boot only to refuse every filtered config.
+COPY --from=renderer-builder /build/smtp-recipient-render /usr/local/bin/smtp-recipient-render
+
 # newaliases/mailq are hard links to sendmail in the upstream install; COPY
 # would materialize them as two extra full copies, so recreate the links the
 # way postfix-install does. Ownership/modes are baked correctly above and
@@ -299,7 +347,8 @@ RUN ln -f /usr/sbin/sendmail /usr/bin/newaliases \
 
 # ---------------------------------------------------------------------------
 # Test stage - runs the golden-file config-generation tests at build time
-# (`entrypoint.sh render` needs only busybox tools), then asserts the
+# (`entrypoint.sh render` needs only busybox tools plus the recipient_access
+# renderer installed in the base stage), then asserts the
 # source-built Postfix: exact pinned version; embedded SBOM fragment
 # shipped, JSON-shaped, naming postfix at the same ARG-pinned version;
 # TLS, Cyrus SASL client, and
@@ -317,7 +366,14 @@ ARG POSTFIX_VERSION
 COPY --chmod=755 validate.sh recipient-filter.sh entrypoint.sh /usr/local/bin/
 COPY tests/render-test.sh /tmp/tests/render-test.sh
 COPY tests/golden/ /tmp/tests/golden/
-RUN ENTRYPOINT_DIR=/usr/local/bin sh /tmp/tests/render-test.sh \
+# The renderer must be resolvable on PATH before the golden tests run: this
+# stage carries no C compiler and no .c file, so render-test.sh takes the
+# installed binary, and every recipient case depends on it. Assert it up front
+# so a base-stage regression reads as one clear failure instead of forty
+# golden diffs.
+RUN { command -v smtp-recipient-render >/dev/null \
+      || { printf '%s\n' 'FAIL: smtp-recipient-render is not on PATH in the test stage' >&2; exit 1; }; } \
+    && ENTRYPOINT_DIR=/usr/local/bin sh /tmp/tests/render-test.sh \
     && { test "$(postconf -h mail_version)" = "${POSTFIX_VERSION#v}" \
       || { printf 'FAIL: mail_version %s does not match pinned %s\n' \
              "$(postconf -h mail_version)" "${POSTFIX_VERSION#v}" >&2; exit 1; }; } \

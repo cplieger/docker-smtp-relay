@@ -70,7 +70,7 @@ services:
 | `SMTPD_TLS_SECURITY_LEVEL` | Inbound TLS level: `may` (opportunistic; STARTTLS offered, cleartext still accepted) or `encrypt` (require TLS from every sender). Only meaningful with the cert/key pair set; setting it without the pair is rejected. | `may` when certs set | No |
 | `MESSAGE_SIZE_LIMIT` | Maximum message size in bytes (default 10240000 = 10 MB, AWS SES supports up to 40 MB with limit increase) | `10240000` | No |
 | `ACCEPTED_NETWORKS` | Space-separated CIDRs allowed to send mail through this relay. If unset, the entrypoint defaults to all RFC 1918 ranges (`192.168.0.0/16 172.16.0.0/12 10.0.0.0/8`); the shipped compose example deliberately narrows this to `192.168.0.0/16`. | `192.168.0.0/16 172.16.0.0/12 10.0.0.0/8` | No |
-| `RECIPIENT_RESTRICTIONS` | Optional recipient allowlist: space-separated address, domain, and Postfix regexp tokens (including `/pattern/flags` and `/pattern1/!/pattern2/` forms). If set, only matching recipients are accepted; leave empty to allow all. Misconfigurations fail the boot loudly; see [Recipient filtering](#recipient-filtering) below. | _(unset)_ | No |
+| `RECIPIENT_RESTRICTIONS` | Optional recipient allowlist: space-separated address, domain, and Postfix regexp tokens (including `/pattern/flags` and `/pattern1/!/pattern2/` forms). If set, only matching recipients are accepted; leave empty to allow all. Bounded at 4096 bytes and 128 entries; a larger value is rejected at boot. Misconfigurations fail the boot loudly; see [Recipient filtering](#recipient-filtering) below. | _(unset)_ | No |
 | `SMTP_HOSTNAME` | Postfix `myhostname` / HELO identity. Use an FQDN; some receiving MTAs reject non-FQDN HELO names. Validation rejects whitespace and shell metacharacters; it does not enforce FQDN shape. | `smtp-relay.local` | No |
 | `STARTUP_PROBE` | Run a fail-soft TCP reachability check against the upstream relay at startup; see [Observability](#observability). `true` or `false`. | `true` | No |
 | `STARTUP_PROBE_TIMEOUT` | Timeout in seconds for the startup reachability probe (1-10; kept under the 15s healthcheck start-period so a slow probe never delays readiness). | `5` | No |
@@ -161,10 +161,18 @@ Regexp tokens match against the full `user@domain` address smtpd presents.
 They are not analyzed for reachability: an anchored pattern that can never
 match, such as `/^@example\.com$/`, still counts as an effective rule.
 
-Three checks run at boot, so a filter that would silently refuse or admit
+The whole value is bounded: at most **4096 bytes** across at most **128
+entries**. An allowlist you write by hand does not reach either limit, and the
+map is rendered before Postfix starts, so the bound keeps that step short
+instead of scaling with whatever length a value happens to have. Exceeding
+either limit is rejected at boot (exit 2) and names the limit it hit.
+
+Four checks run at boot, so a filter that would silently refuse or admit
 every recipient fails visibly instead. The healthcheck cannot see either
 mistake, since port 25 answers either way.
 
+- **Too large: exit 2.** More than 4096 bytes, or more than 128 entries, as
+  above.
 - **Never-match warns.** A domain with a leading dot or an embedded `/`, an
   address with an empty local part or empty domain or a dot right after the
   `@`, and a regexp half that does not compile are each warned and excluded

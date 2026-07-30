@@ -28,6 +28,21 @@ readonly CONF_DIR
 readonly SASL_PASSWD_FILE="${CONF_DIR}/sasl_passwd"
 readonly MAIN_CF="${CONF_DIR}/main.cf"
 
+# Input bounds for RECIPIENT_RESTRICTIONS. The recipient_access map is
+# rendered by smtp-recipient-render in ONE bounded pass, and a bounded pass
+# needs a bounded input: an allowlist an operator hand-writes has no business
+# reaching 4 KiB or 128 entries, and before the bound existed a pathological
+# value held pre-start validation (PID 1, no deadline, before
+# `exec postfix start-fg`) for as long as its length dictated. Both numbers
+# are enforced twice on purpose: here, so an oversized value is refused in the
+# same style and log format as every other env var, and again inside the
+# renderer, so it is safe to run standalone. They MUST equal
+# RCPT_MAX_INPUT_BYTES / RCPT_MAX_TOKENS in smtp-recipient-render.c;
+# tests/render-test.sh asserts the two sides agree, so editing one alone
+# fails the suite.
+readonly RECIPIENT_RESTRICTIONS_MAX_BYTES=4096
+readonly RECIPIENT_RESTRICTIONS_MAX_TOKENS=128
+
 # ---------------------------------------------------------------------------
 # Exit codes: 2 = config-validation failure, 1 = runtime failure
 # ---------------------------------------------------------------------------
@@ -43,7 +58,7 @@ readonly MAIN_CF="${CONF_DIR}/main.cf"
 # RELAY_PORT                       integer   587                  1-65535
 # RELAY_LOGIN                      string    ""                   no whitespace or colons
 # RELAY_PASSWORD                   string    ""                   no whitespace
-# RECIPIENT_RESTRICTIONS           string    ""                   space-separated; addresses, domains, or regexp constructs (/P/, /P/flags, /P1/[flags]!/P2/[flags])
+# RECIPIENT_RESTRICTIONS           string    ""                   space-separated; addresses, domains, or regexp constructs (/P/, /P/flags, /P1/[flags]!/P2/[flags]); max 4096 bytes, max 128 entries
 # SMTP_TLS_SECURITY_LEVEL          enum      secure               one of $TLS_LEVELS (see validate.sh); not none/may/dane with RELAY_PORT=465; fingerprint requires SMTP_TLS_FINGERPRINT_CERT_MATCH
 # SMTP_TLS_FINGERPRINT_CERT_MATCH  string    ""                   space-separated digests, each colon-separated hex pairs; both-or-neither with level=fingerprint
 # SMTP_TLS_FINGERPRINT_DIGEST      enum      sha256               sha256|sha512 only; explicitly setting it at a non-fingerprint level is fatal
@@ -141,6 +156,7 @@ validate_field_check() {
     nl) validate_no_newlines "$1" "$2" ;;
     num) validate_numeric "$1" "$2" ;;
     meta) validate_no_metacharacters "$1" "$2" ;;
+    maxbytes=*) validate_max_bytes "$1" "$2" "${3#maxbytes=}" ;;
     range=*)
       _vfc_range="${3#range=}"
       validate_range "$1" "$2" "${_vfc_range%%:*}" "${_vfc_range#*:}"
@@ -156,7 +172,8 @@ validate_field_check() {
 # field-specific validators not expressible in the table, and the
 # required-variable check.
 # Format: VAR_NAME:check[,check...]
-# Checks: nl=no_newlines, num=numeric, meta=no_metacharacters, range=MIN:MAX
+# Checks: nl=no_newlines, num=numeric, meta=no_metacharacters, range=MIN:MAX,
+#         maxbytes=N
 validate_declared_fields() {
   _spec_table="
 CONF_DIR:nl,meta
@@ -165,7 +182,7 @@ RELAY_PORT:nl,num,range=1:65535
 RELAY_LOGIN:nl
 RELAY_PASSWORD:nl
 ACCEPTED_NETWORKS:nl
-RECIPIENT_RESTRICTIONS:nl
+RECIPIENT_RESTRICTIONS:nl,maxbytes=$RECIPIENT_RESTRICTIONS_MAX_BYTES
 SMTP_TLS_SECURITY_LEVEL:nl
 SMTP_TLS_FINGERPRINT_CERT_MATCH:nl
 SMTP_TLS_FINGERPRINT_DIGEST:nl
@@ -210,6 +227,8 @@ STARTUP_PROBE_TIMEOUT:nl,num,range=1:10
   validate_sasl_login "$RELAY_LOGIN" || exit 2
   validate_sasl_password "$RELAY_PASSWORD" || exit 2
   validate_tls_level "$SMTP_TLS_SECURITY_LEVEL" || exit 2
+  validate_recipient_entry_count "$RECIPIENT_RESTRICTIONS" \
+    "$RECIPIENT_RESTRICTIONS_MAX_TOKENS" || exit 2
 
   # Required variables (kept here, before the SASL pairing check, so the
   # exit-2 precedence between the two errors is unchanged)
@@ -649,10 +668,9 @@ compute_sasl_state() {
 # promote_rendered_file TMP DEST LABEL -- finish an atomic render: chmod the
 # temp file to the world-readable 0644 the Postfix daemons need (mktemp
 # creates 0600), then mv it into place. On failure emit a structured
-# level=error naming LABEL, remove the temp file, and exit 1. Shared by
-# render_main_cf and build_recipient_filter (all three scripts are sourced
-# into one shell, so the caller in recipient-filter.sh resolves this at call
-# time, exactly like its existing sanitize_token calls into validate.sh).
+# level=error naming LABEL, remove the temp file, and exit 1. Used by
+# render_main_cf; the recipient_access map does the same two steps inside
+# smtp-recipient-render, which owns its own temp file.
 # ---------------------------------------------------------------------------
 promote_rendered_file() {
   if ! chmod 644 "$1" || ! mv "$1" "$2"; then
@@ -667,8 +685,7 @@ promote_rendered_file() {
 # in CONF_DIR and print the path. On failure emit a structured level=error
 # naming LABEL and return 1 (callers `|| exit 1`; a helper in a command
 # substitution runs in a subshell, so it cannot exit the script itself).
-# The counterpart of promote_rendered_file, shared the same sourced-shell way
-# by render_main_cf and build_recipient_filter.
+# The counterpart of promote_rendered_file, used by render_main_cf.
 # ---------------------------------------------------------------------------
 create_rendered_tmp() {
   if ! mktemp "$1.XXXXXX"; then
