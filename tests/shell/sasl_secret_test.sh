@@ -255,8 +255,9 @@ SHIMEOF
 # The timeout shim RECORDS its argv before handing off: postmap_restricted's whole
 # supervision (`exec timeout -k 5 "$STARTUP_CMD_TIMEOUT" postmap`) was otherwise
 # deletable with every assertion green, because a shim that blindly `shift 3`s
-# cannot tell a supervised call from a bare one. Uses `command timeout` rather than a
-# hardcoded path so the real binary is found wherever it lives.
+# cannot tell a supervised call from a bare one. No real timeout runs here: the shim
+# drops the supervisor's own options (shift 3) and execs the supervised command
+# directly, so nothing in this file depends on where a timeout binary lives.
 cat >"$SHIM/timeout" <<'SHIMEOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"${TIMEOUT_ARGV:?}"

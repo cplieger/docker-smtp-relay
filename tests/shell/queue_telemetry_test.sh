@@ -56,10 +56,18 @@ cat "$budget_src" "$WORK/f1.sh" "$WORK/f2.sh" "$WORK/f3.sh" "$WORK/f4.sh" >"$FNS
 # everything; the shim only proves WHAT it decided.
 SHIM="$WORK/shim"
 mkdir -p "$SHIM"
+# Resolve the real binary BEFORE $SHIM goes on PATH. This shim must re-exec the
+# genuine timeout (the shipped scan_queue_files runs unreplaced and has to be
+# really supervised), and `command timeout` from inside the shim would re-enter
+# the shim itself -- so the path is resolved out here instead of hardcoded.
+REAL_TIMEOUT=$(command -v timeout) || {
+  printf 'harness error: no timeout binary on PATH\n' >&2
+  exit 1
+}
 cat >"$SHIM/timeout" <<SHIMEOF
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >>"\$TIMEOUT_ARGV"
-exec /usr/bin/timeout "\$@"
+exec $REAL_TIMEOUT "\$@"
 SHIMEOF
 chmod +x "$SHIM/timeout"
 

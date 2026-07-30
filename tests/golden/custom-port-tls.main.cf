@@ -4,6 +4,12 @@ compatibility_level = 3.6
 
 myhostname = relay.example.com
 mydestination = localhost
+# Relay-only image: local(8) delivery is disabled (Postfix
+# STANDARD_CONFIGURATION_README gateway recipe), so no SMTP client can ever
+# cause a write into a container mailbox. localhost stays in mydestination so
+# an unknown localhost recipient is still rejected at RCPT and a stray one is
+# never silently forwarded upstream instead.
+local_transport = error: local mail delivery is disabled
 mynetworks = 127.0.0.0/8 [::1]/128 10.10.0.0/16
 inet_interfaces = all
 
