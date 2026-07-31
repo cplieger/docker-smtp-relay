@@ -64,7 +64,7 @@ services:
 | `RELAY_PORT` | Upstream relay port: 587 for STARTTLS, 465 for implicit TLS. 465 requires a mandatory `SMTP_TLS_SECURITY_LEVEL` (`encrypt` or stronger, including `dane-only` and `fingerprint`); `none`, `may`, and `dane` are rejected with it. | `587` | No |
 | `SMTP_TLS_SECURITY_LEVEL` | Outbound TLS level: `secure` (default; chain + hostname verification), `verify`, `encrypt`, `dane`/`dane-only`/`fingerprint` (see [TLS security levels](#tls-security-levels)), `may`, or `none`. See the [Postfix TLS README](https://www.postfix.org/TLS_README.html). Prefer `secure`/`verify` when SASL (`RELAY_LOGIN`/`RELAY_PASSWORD`) is set; `encrypt` and weaker lack peer authentication. | `secure` | No |
 | `SMTP_TLS_FINGERPRINT_CERT_MATCH` | One or more space-separated certificate or public-key digests of the upstream, each formatted as colon-separated hex pairs (see [TLS security levels](#tls-security-levels)). Both-or-neither with `SMTP_TLS_SECURITY_LEVEL=fingerprint`: required at that level, rejected at any other (a silently ignored trust anchor is a misconfiguration). | _(unset)_ | No |
-| `SMTP_TLS_FINGERPRINT_DIGEST` | Digest algorithm for fingerprint matching: `sha256` or `sha512` only (md5/sha1 are rejected as collision-weak). Only meaningful with `SMTP_TLS_SECURITY_LEVEL=fingerprint`; explicitly setting it at any other level is rejected (both-or-neither, like the cert match). | `sha256` | No |
+| `SMTP_TLS_FINGERPRINT_DIGEST` | Digest algorithm for fingerprint matching: `sha256` or `sha512` only (md5/sha1 are rejected as collision-weak). Only meaningful with `SMTP_TLS_SECURITY_LEVEL=fingerprint`; setting it to a digest name at any other level is rejected (both-or-neither, like the cert match), while an empty value counts as unset. | `sha256` | No |
 | `SMTPD_TLS_CERT_FILE` | Server certificate for inbound STARTTLS on port 25 (PEM; may include the chain). Both-or-neither with `SMTPD_TLS_KEY_FILE`: mount and set both to offer STARTTLS to sending clients (see [Inbound TLS (STARTTLS)](#inbound-tls-starttls)); without the pair, inbound stays cleartext. | _(unset)_ | No |
 | `SMTPD_TLS_KEY_FILE` | Private key for the inbound STARTTLS certificate (PEM). Both-or-neither with `SMTPD_TLS_CERT_FILE`. A group- or world-readable key file draws a startup warning. | _(unset)_ | No |
 | `SMTPD_TLS_SECURITY_LEVEL` | Inbound TLS level: `may` (opportunistic; STARTTLS offered, cleartext still accepted) or `encrypt` (require TLS from every sender). Only meaningful with the cert/key pair set; setting it without the pair is rejected. | `may` when certs set | No |
@@ -155,7 +155,10 @@ the one variable:
   `/^alerts@example\.com$/i` matches only the lowercase spelling.
 - **Dual-pattern regexp**: `/pattern1/!/pattern2/`, either half optionally
   flagged. Matches `pattern1` AND NOT `pattern2`, for example
-  `/.*@example\.com/!/^noreply@/` for the whole domain except noreply.
+  `/.*@example\.com$/!/^noreply@/` for the whole domain except noreply.
+  Anchor a domain half with `$`: patterns are substring matches, so the
+  unanchored `/.*@example\.com/` would also accept
+  `victim@example.com.attacker.net`.
 
 Regexp tokens match against the full `user@domain` address smtpd presents.
 They are not analyzed for reachability: an anchored pattern that can never
@@ -284,8 +287,11 @@ alternatively be extracted into Prometheus metrics with an Alloy `loki.process`
 
 The entrypoint validates all env vars before generating Postfix
 config: newline injection, numeric range, shell metacharacters,
-open-relay CIDR rejection (`0.0.0.0/0` and `::/0` blocked, prefixes ≥/8 required),
-TLS level allowlisting, and SASL credential field-format checks.
+open-relay CIDR rejection (`0.0.0.0/0` and `::/0` blocked, prefixes ≥/8
+required, and a startup warning when an accepted range is not inside private
+address space, since a mistyped prefix like `192.168.0.0/8` passes the floor
+but covers ~16M public hosts), TLS level allowlisting, and SASL credential
+field-format checks.
 Recipient filter entries are regex-escaped before rendering.
 Outbound TLS pins `>=TLSv1.2` and `high` cipher grade; default
 security level is `secure` (chain + hostname verification).

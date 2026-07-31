@@ -41,7 +41,9 @@ runs. Three scripts are copied into `/usr/local/bin/` and run as a unit:
 
 Validation is data-driven: `_spec_table` in `entrypoint.sh` maps each
 env var to a comma-separated list of checks (`nl`, `num`, `meta`,
-`range=MIN:MAX`). Add a new validated variable by extending that table:
+`range=MIN:MAX`, and the `rcptrules` / `rcptbytes` size bounds that cap
+`RECIPIENT_RESTRICTIONS` at 256 rules and 16384 bytes). Add a new validated
+variable by extending that table:
 the loop resolves each row's value indirectly from the named variable, so
 the name lives in exactly one place (no per-var `case` to keep in sync, and
 no hand-written `if` block). Field-specific checks that don't fit the table
