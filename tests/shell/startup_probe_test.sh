@@ -164,11 +164,15 @@ probe_under_set_e
   || no "bracket stripping" "argv: $(argv_line)"
 
 # --- 5. STARTUP_PROBE=false disables the probe entirely -------------------------
+# Disabling the probe is a deliberate operator choice, so it is announced once
+# rather than silently: an image that never probes and never says so is
+# indistinguishable in the logs from one whose probe was skipped by a bug.
 setup
 STARTUP_PROBE=false
 probe_under_set_e
-[ "$_rc" -eq 0 ] && [ ! -s "$ARGV" ] && [ ! -s "$LOG" ] \
-  && ok "STARTUP_PROBE=false spawns nothing and logs nothing" \
+[ "$_rc" -eq 0 ] && [ ! -s "$ARGV" ] \
+  && logged 'msg="startup probe disabled" var=STARTUP_PROBE' \
+  && ok "STARTUP_PROBE=false spawns nothing and logs the disabled state once" \
   || no "probe disabled" "rc=$_rc, argv: $(argv_line), log: $(cat "$LOG")"
 
 # --- 6. an unreachable upstream is FAIL-SOFT ------------------------------------

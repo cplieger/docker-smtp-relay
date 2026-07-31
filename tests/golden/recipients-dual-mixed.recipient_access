@@ -1,0 +1,4 @@
+/^alerts@example\.com$/ OK
+/@example\.org$/ OK
+/.*@example\.net/!/^noreply@/ OK
+/.*/ REJECT

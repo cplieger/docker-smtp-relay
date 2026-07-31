@@ -48,6 +48,7 @@ load_function sanitize_token
 ENTRYPOINT="$EP_SH"
 load_function sasl_enabled
 load_function cleanup_sasl_plaintext
+load_function cleanup_sasl_plaintext_or_log
 load_function timeout_log_fields
 load_function run_interruptible
 load_function terminate_startup_child
@@ -128,12 +129,30 @@ run_write
 # mode, so only the create path honors the umask. Sampled at postmap time because
 # the function deletes the plaintext before returning.
 setup
-: >"$SASL_PASSWD_FILE"
-chmod 644 "$SASL_PASSWD_FILE"
-run_write
-[ "$(cat "$SEEN_MODE")" = 600 ] \
-  && ok "the plaintext credential file is 0600 while postmap reads it, even over a stale 0644 file" \
-  || no "plaintext created under umask 077" "mode at postmap time was $(cat "$SEEN_MODE"), not 600"
+# Premise: the scratch filesystem has to derive a new file's mode from the
+# umask at all. An ACL-inheriting mount (measured on ZFS with nfs4acl) gives
+# every new file the inherited mode whatever the umask -- `touch` reads 770
+# under umask 022 -- so the assertion below would fail for a maintainer on
+# such a tree while passing in CI. That is a premise that cannot hold here,
+# which is what lib.sh's skip exists for. Note precisely what the skip costs:
+# entrypoint.sh has TWO umask 077 guards, and case 12 pins the OTHER one
+# (postmap_restricted's, recorded as a umask value rather than a mode, so it
+# survives here). The plaintext write's own umask 077 is covered by THIS case
+# alone, so on an ACL-inheriting tree it is verified only in CI, whose
+# filesystem does derive modes from the umask.
+(umask 077 && : >"$CASE/mode-probe")
+_fs_mode=$(stat -c %a "$CASE/mode-probe")
+if [ "$_fs_mode" != 600 ]; then
+  skip "the plaintext credential file is 0600 while postmap reads it" \
+    "this filesystem does not derive modes from the umask (umask 077 created mode $_fs_mode)"
+else
+  : >"$SASL_PASSWD_FILE"
+  chmod 644 "$SASL_PASSWD_FILE"
+  run_write
+  [ "$(cat "$SEEN_MODE")" = 600 ] \
+    && ok "the plaintext credential file is 0600 while postmap reads it, even over a stale 0644 file" \
+    || no "plaintext created under umask 077" "mode at postmap time was $(cat "$SEEN_MODE"), not 600"
+fi
 
 # --- 3. the sasl_passwd record keeps the field format the validators protect -----
 # `<relayhost> <login>:<password>`, split on the first whitespace then the first
@@ -236,8 +255,9 @@ SHIMEOF
 # The timeout shim RECORDS its argv before handing off: postmap_restricted's whole
 # supervision (`exec timeout -k 5 "$STARTUP_CMD_TIMEOUT" postmap`) was otherwise
 # deletable with every assertion green, because a shim that blindly `shift 3`s
-# cannot tell a supervised call from a bare one. Uses `command timeout` rather than a
-# hardcoded path so the real binary is found wherever it lives.
+# cannot tell a supervised call from a bare one. No real timeout runs here: the shim
+# drops the supervisor's own options (shift 3) and execs the supervised command
+# directly, so nothing in this file depends on where a timeout binary lives.
 cat >"$SHIM/timeout" <<'SHIMEOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"${TIMEOUT_ARGV:?}"
@@ -247,7 +267,8 @@ SHIMEOF
 chmod +x "$SHIM/postmap" "$SHIM/timeout"
 
 FNS="$WORK/real-fns.sh"
-for _fn in sasl_enabled cleanup_sasl_plaintext abort_sasl_secret startup_abort \
+for _fn in sasl_enabled cleanup_sasl_plaintext cleanup_sasl_plaintext_or_log \
+  abort_sasl_secret startup_abort \
   postmap_restricted terminate_startup_child run_interruptible timeout_log_fields \
   write_sasl_secret; do
   extract_function "$_fn" "$WORK/_rf_$_fn.sh" >/dev/null

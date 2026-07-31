@@ -22,7 +22,7 @@ ARG POSTFIX_SHA256=4a6ab3d0e9390989fa201fc6c446045fc702c4e16e7a247c3ae261c9e9bee
 # (openssl), Cyrus SASL client auth, PCRE2, LMDB as the default database type
 # with Berkeley DB disabled (hash:/btree: maps transparently use LMDB - see
 # Postfix's NON_BERKELEYDB_README; the entrypoint's `hash:` sasl_passwd map
-# and `btree:` TLS session cache both depend on this), NIS off, and
+# depends on this; its TLS session cache is an explicit lmdb: map), NIS off, and
 # EAI/SMTPUTF8 on (makedefs auto-detects icu-dev). The LDAP/MySQL/PgSQL/
 # SQLite backends that Alpine splits into subpackages (never installed by
 # this image) are skipped, and map types are compiled in statically
@@ -79,8 +79,10 @@ COPY postfix-release.gpg /usr/local/share/postfix-release.gpg
 # resolved via the staged config dir (the builder has no /etc/postfix), and
 # postfix-files trimmed of doc/manpage/.default/LICENSE entries so `postfix
 # set-permissions` (run by the entrypoint at every boot) keeps working
-# against the slimmed install. Each sed is grep-verified so silent drift in
-# upstream sources fails the build instead of shipping a behavior change.
+# against the slimmed install. Each sed is guarded fail-closed: a pre-sed
+# grep requires the exact expected upstream form (so source drift during a
+# version bump fails the build), and post-sed greps require the old form
+# absent and the new form present (so a sed that silently no-ops fails too).
 # The single-quoted `$CONFIG_DIRECTORY` in the postfix-install sed is meant
 # literally (postfix-install expands it at install time, not this shell), so
 # SC2016 is a false positive here.
@@ -97,32 +99,48 @@ COPY postfix-release.gpg /usr/local/share/postfix-release.gpg
 # mirror/network failure keeps its diagnostic in the BuildKit log (DL3047
 # wants -q/-nv/--progress back, but busybox wget has no -nv/--progress and
 # -q is what silenced fetch failures; BuildKit hides the output on success).
+# BusyBox wget accepts but ignores --tries (no retry support), so the
+# primary/fallback mirror pair IS the retry story: one attempt per mirror.
 # hadolint ignore=SC2016,DL3047
-RUN { wget --tries=3 --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz" \
+RUN { wget --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz" \
         "https://high5.nl/mirrors/postfix-release/official/postfix-${POSTFIX_VERSION#v}.tar.gz" \
-      || wget --tries=3 --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz" \
+      || wget --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz" \
         "http://ftp.porcupine.org/mirrors/postfix-release/official/postfix-${POSTFIX_VERSION#v}.tar.gz"; } \
-    && { wget --tries=3 --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz.gpg2" \
+    && { wget --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz.gpg2" \
         "https://high5.nl/mirrors/postfix-release/official/postfix-${POSTFIX_VERSION#v}.tar.gz.gpg2" \
-      || wget --tries=3 --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz.gpg2" \
+      || wget --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz.gpg2" \
         "http://ftp.porcupine.org/mirrors/postfix-release/official/postfix-${POSTFIX_VERSION#v}.tar.gz.gpg2"; } \
     && gpgv --keyring /usr/local/share/postfix-release.gpg \
         "postfix-${POSTFIX_VERSION#v}.tar.gz.gpg2" "postfix-${POSTFIX_VERSION#v}.tar.gz" \
     && printf '%s  %s\n' "$POSTFIX_SHA256" "postfix-${POSTFIX_VERSION#v}.tar.gz" | sha256sum -c - \
     && tar xzf "postfix-${POSTFIX_VERSION#v}.tar.gz" --strip-components=1 --no-same-owner \
     && rm "postfix-${POSTFIX_VERSION#v}.tar.gz" "postfix-${POSTFIX_VERSION#v}.tar.gz.gpg2" \
+    && { grep -Eq '^#define HAS_NIS([[:space:]]|$)' src/util/sys_defs.h \
+      || { printf '%s\n' 'FAIL: expected active #define HAS_NIS missing from src/util/sys_defs.h (upstream source drift)' >&2; exit 1; }; } \
+    && { grep -Eq '^#define ALIAS_DB_MAP[[:space:]].*:/etc/aliases' src/util/sys_defs.h \
+      || { printf '%s\n' 'FAIL: expected ALIAS_DB_MAP :/etc/aliases form missing from src/util/sys_defs.h (upstream source drift)' >&2; exit 1; }; } \
     && sed -i -e 's|#define HAS_NIS|//#define HAS_NIS|g' \
            -e '/^#define ALIAS_DB_MAP/s|:/etc/aliases|:/etc/postfix/aliases|' \
            src/util/sys_defs.h \
-    && { grep -q '//#define HAS_NIS' src/util/sys_defs.h \
+    && { ! grep -Eq '^#define HAS_NIS([[:space:]]|$)' src/util/sys_defs.h \
+      || { printf '%s\n' 'FAIL: an active #define HAS_NIS survived the sed in src/util/sys_defs.h' >&2; exit 1; }; } \
+    && { grep -Eq '^//#define HAS_NIS([[:space:]]|$)' src/util/sys_defs.h \
       || { printf '%s\n' 'FAIL: HAS_NIS was not commented out in src/util/sys_defs.h' >&2; exit 1; }; } \
-    && { grep -q ':/etc/postfix/aliases' src/util/sys_defs.h \
+    && { ! grep -Eq '^#define ALIAS_DB_MAP[[:space:]].*:/etc/aliases' src/util/sys_defs.h \
+      || { printf '%s\n' 'FAIL: an ALIAS_DB_MAP :/etc/aliases form survived the sed in src/util/sys_defs.h' >&2; exit 1; }; } \
+    && { grep -Eq '^#define ALIAS_DB_MAP[[:space:]].*:/etc/postfix/aliases' src/util/sys_defs.h \
       || { printf '%s\n' 'FAIL: ALIAS_DB_MAP was not rewritten to /etc/postfix/aliases in src/util/sys_defs.h' >&2; exit 1; }; } \
+    && { grep -q '/usr/local/' conf/master.cf \
+      || { printf '%s\n' 'FAIL: expected /usr/local/ paths missing from conf/master.cf (upstream source drift)' >&2; exit 1; }; } \
     && sed -i 's:/usr/local/:/usr/:g' conf/master.cf \
     && { ! grep -q '/usr/local/' conf/master.cf \
       || { printf '%s\n' 'FAIL: /usr/local/ paths remain in conf/master.cf' >&2; exit 1; }; } \
+    && { grep -q 'bin/postconf -dhx mail_version' postfix-install \
+      || { printf '%s\n' 'FAIL: expected mail_version lookup missing from postfix-install (upstream source drift)' >&2; exit 1; }; } \
     && sed -i 's|"`bin/postconf -dhx mail_version`"|"`bin/postconf -c $CONFIG_DIRECTORY -dhx mail_version`"|' postfix-install \
-    && { grep -q 'postconf -c \$CONFIG_DIRECTORY' postfix-install \
+    && { ! grep -q 'postconf -dhx mail_version' postfix-install \
+      || { printf '%s\n' 'FAIL: the original mail_version lookup survived the sed in postfix-install' >&2; exit 1; }; } \
+    && { grep -q 'postconf -c \$CONFIG_DIRECTORY -dhx mail_version' postfix-install \
       || { printf '%s\n' 'FAIL: mail_version lookup in postfix-install was not rewritten to use $CONFIG_DIRECTORY' >&2; exit 1; }; } \
     && cflags="-Os -fstack-clash-protection -Wformat -Werror=format-security" \
     && ldflags="-Wl,--as-needed,-O1,--sort-common" \
@@ -156,6 +174,29 @@ RUN { wget --tries=3 --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz" \
        done \
     && rm -f /out/etc/postfix/*.default /out/etc/postfix/*LICENSE* \
         /out/etc/postfix/makedefs.out \
+    # Pre-sed gate for the postfix-files trim below: the sed selectors and
+    # the negative grep after it share the same spellings, so an upstream
+    # postfix-files format change could make both miss while the build still
+    # passes — and the rm above would have removed staged files that stale
+    # entries still reference, tripping `postfix set-permissions` at every
+    # boot instead of failing here. Assert each deletion selector matches an
+    # entry BEFORE mutation, proving every intended selector had an input.
+    # The shlib_directory/postfix- selector is asserted to match NOTHING:
+    # with dynamicmaps=no this build stages no postfix-*.so plugin entries,
+    # so that selector is purely defensive — if entries ever appear, fail
+    # the build so a human decides whether deleting them is still correct.
+    && { ! grep -q -e 'shlib_directory/postfix-' /out/etc/postfix/postfix-files \
+      || { printf '%s\n' 'FAIL: upstream postfix-files drift: unexpected shlib_directory/postfix- entries pre-trim (dynamicmaps=no should stage none)' >&2; exit 1; }; } \
+    && for _pf_sel in \
+        'meta_directory/makedefs\.out' \
+        'manpage_directory' \
+        'config_directory/LICENSE' \
+        'config_directory/TLS_LICENSE' \
+        'config_directory/[^/]\+\.cf\.default' \
+      ; do \
+        grep -q -e "$_pf_sel" /out/etc/postfix/postfix-files \
+          || { printf 'FAIL: upstream postfix-files drift: no entry matches pre-trim selector %s\n' "$_pf_sel" >&2; exit 1; }; \
+      done \
     && sed -i \
         -e '/shlib_directory\/postfix-/d' \
         -e '/meta_directory\/makedefs.out/d' \
@@ -342,6 +383,7 @@ RUN ENTRYPOINT_DIR=/usr/local/bin sh /tmp/tests/render-test.sh \
         RECIPIENT_RESTRICTIONS="ops@example.com" \
         sh /usr/local/bin/entrypoint.sh render \
     && newaliases \
+    && postfix set-permissions \
     && postfix check \
     && { test "$(postconf -hx smtputf8_enable)" = "yes" \
       || { printf '%s\n' 'FAIL: smtputf8_enable is not yes in the rendered config' >&2; exit 1; }; } \

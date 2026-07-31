@@ -2,7 +2,7 @@
 # ---------------------------------------------------------------------------
 # validate.sh — input-validation helpers for smtp-relay entrypoint.
 # Sourced at runtime by entrypoint.sh. Canonical copy; there is no shared
-# validation library (the former lib/shell/validate.sh was removed).
+# validation library.
 # ---------------------------------------------------------------------------
 
 # printf '%s' + trailing-newline strip lets a single trailing newline pass
@@ -35,25 +35,58 @@ validate_no_newlines() {
 #   Tier 1 (always fatal, security): injection into rendered config (the
 #     newline/metacharacter checks), open-relay CIDR rejection, credential
 #     exposure (SASL field format; cleartext TLS with SASL), and any input
-#     that silently turns a configured restriction into allow-all (the
-#     empty / slash-leading recipient regex class).
+#     that silently turns a configured restriction into allow-all. That
+#     last class is an explicit closed-set grant covering the empty /
+#     slash-leading recipient regex class, including the dual form's empty
+#     pattern halves, and the universal-match regexp class: any recipient
+#     construct the two-impossible-probe guard in recipient-filter.sh flags
+#     as possibly allow-all. That guard applies to the FULL construct —
+#     single form iff P matches a probe, dual form iff P1 matches AND NOT
+#     P2 — with per-half flag-mirrored probes, and its fatal message states
+#     the honest possibly-allow-all heuristic plus the split / leave-empty
+#     remediations instead of claiming a proof.
 #   Tier 2 (fatal, documented contract): value combinations the app's own
 #     documented contract says can never function -- the implicit-TLS 465
-#     mandatory-level gate, the landed never-matching-shape escalations
+#     mandatory-level gate, the never-matching-shape escalations
 #     (whitespace-only / leading-zero / multi-slash network entries,
 #     leading-bracket RELAY_HOST defects), and the fingerprint-family
 #     checks (both-or-neither with level=fingerprint; per-token
 #     colon-separated-hex-pairs format with digest-matching pair count;
-#     sha256/sha512 digest allowlist). This set is CLOSED: each entry
-#     was an explicit user decision; new entries require the same.
+#     sha256/sha512 digest allowlist), and the RECIPIENT_RESTRICTIONS size
+#     bounds (max rules, max bytes: rendering costs external processes per
+#     rule before Postfix binds port 25, so the count and the length are
+#     capped at a conservative fixed budget an order of magnitude inside
+#     the healthcheck start-period, NOT at the measured point where a boot
+#     actually misses it; hard-coded and deliberately not tunable, because
+#     this image renders smtpd_recipient_restrictions itself and exposes
+#     no access-map or policy-service setting, so a larger allowlist needs
+#     a Postfix deployment of its own). This set is CLOSED: each entry is
+#     an explicit user decision; new entries require the same.
 #   Tier 3 (operator's responsibility): syntactically-plausible but
 #     semantically-wrong values beyond those tiers (typo'd hostnames,
 #     host:port confusion, exotic never-matching shapes). The validator does
 #     NOT chase these per-shape: the existing warn arms (all shape
-#     heuristics; every $TLS_LEVELS entry is now fully supported, so no
-#     level-specific warn arms remain) are grandfathered-final, no new shape
-#     arms get added without a Tier 1/2 justification, and Postfix's own
-#     runtime diagnostics are the source of truth for them.
+#     heuristics; every $TLS_LEVELS entry is fully supported, so no
+#     level-specific warn arms remain) are final, no new shape arms get
+#     added without a Tier 1/2 justification, and Postfix's own runtime
+#     diagnostics are the source of truth for them. Warn-only by explicit
+#     user decision, on top of that baseline: the inbound TLS PEM-shape
+#     hints (entrypoint.sh); and, in recipient-filter.sh, the two
+#     deterministic never-match domain shapes plus the three never-match
+#     address shapes (empty local part, empty domain, dot-after-@) — each
+#     keeps its warn but does not count as an effective rule, so an
+#     all-never-match list trips the zero-effective-rules guard while a
+#     mixed list still boots on its valid subset. The regexp-token seam in
+#     recipient-filter.sh is granted on the same template: any token
+#     STARTING with / classifies as regexp-family; the regexp_table(5)
+#     dual-pattern form /P1/[flags]!/P2/[flags] and the /pattern/flags form
+#     (flag set i/m/x, verified in-image against the pinned Postfix) are
+#     fully supported — structure-parsed, per-half compile-probed with
+#     flag-mirrored grep, and emitted verbatim as effective rules; a
+#     structurally unparseable leading-/ token (no closing delimiter,
+#     dangling or doubled !, unknown flag) draws a warn and is SUPPRESSED
+#     (status 10); and mid-token slashes in address tokens are correct
+#     escaped literals (/ is RFC 5321 atext — never warned).
 
 # sanitize_token -- strip logfmt delimiters (backslash, double quote) and
 # control bytes (CR, VT, FF, ...), and bound the value to 512 bytes, so a
@@ -112,6 +145,90 @@ validate_no_metacharacters() {
 validate_range() {
   if [ "$2" -lt "$3" ] || [ "$2" -gt "$4" ]; then
     printf 'level=error msg="env var out of range" var=%s value="%s" min=%s max=%s\n' "$1" "$2" "$3" "$4" >&2
+    return 1
+  fi
+}
+
+# Size bounds for RECIPIENT_RESTRICTIONS. Hard-coded, with no env-var
+# override on purpose: this image renders smtpd_recipient_restrictions itself
+# and exposes no access-map or policy-service setting, so a deployment that
+# genuinely needs thousands of rules needs a Postfix deployment of its own
+# with a table or a policy service, not a bigger knob here.
+# Rendering the recipient map spawns external processes PER RULE -- a sed
+# escape for a literal, an awk structure parse plus grep compile/match
+# probes for a regexp construct -- on the startup path, before Postfix binds
+# port 25 and under no deadline of its own. Measured on this host: ~1.4ms
+# per plain rule, ~4.3ms per regexp rule, linear in the rule count. The
+# container healthcheck's start-period is 15s, so an unbounded list delays a
+# boot that then SUCCEEDS past the point monitoring would notice it. 256
+# rules is ~1.1s at the regexp rate, an order of magnitude inside that
+# budget: the cap is a conservative fixed budget, NOT the measured point
+# where a boot actually misses the start-period (that is thousands of
+# rules), and the rule count is the real bound because the cost scales per
+# rule.
+readonly MAX_RECIPIENT_RULES=256
+# The looser second bound, against the shape a rule count cannot see: one
+# pathological giant token. Wide enough to keep admitting a single ~8 KiB
+# regexp construct (tests/render-test.sh pins that shape), which is already
+# far past any hand-written pattern.
+readonly MAX_RECIPIENT_BYTES=16384
+
+# validate_recipient_rule_count VAR VALUE -- upper bound on how many rules
+# RECIPIENT_RESTRICTIONS may carry (MAX_RECIPIENT_RULES above). Counts the
+# whitespace-separated tokens the renderer itself will iterate: default-IFS
+# field splitting collapses runs of whitespace and ignores leading and
+# trailing whitespace, so padding or a repeated separator cannot inflate the
+# count. Same `set -f` premise as validate_no_open_relay's loop (entrypoint.sh
+# disables pathname expansion, so a glob metacharacter in a token stays one
+# token instead of expanding to file names).
+# Upper bound ONLY: a zero-token value belongs to the zero-effective-rules
+# guard in recipient-filter.sh, which already names the whitespace-only case,
+# so this check must not pre-empt it with a vaguer message.
+validate_recipient_rule_count() {
+  # Copy the var name up front: the count below repurposes the positional
+  # parameters via `set --` (same idiom as validate_fingerprint_match).
+  _rr_var=$1
+  # shellcheck disable=SC2086
+  set -- $2
+  if [ $# -gt "$MAX_RECIPIENT_RULES" ]; then
+    printf 'level=error msg="RECIPIENT_RESTRICTIONS has more rules than this image renders at startup; every rule costs external processes (sed, awk, grep probes) before Postfix binds port 25, so the count is capped at a fixed budget deliberately set an order of magnitude inside the healthcheck start-period rather than measured per boot (this image renders smtpd_recipient_restrictions itself and exposes no access-map or policy-service setting, so a larger allowlist needs a Postfix deployment of your own configured with a check_recipient_access table or a policy service)" var=%s rules=%d max_rules=%d\n' \
+      "$_rr_var" "$#" "$MAX_RECIPIENT_RULES" >&2
+    return 1
+  fi
+}
+
+# validate_recipient_byte_length VAR VALUE -- upper bound on the whole
+# value's byte length (MAX_RECIPIENT_BYTES above), the looser guard against
+# one giant token the rule count cannot see. The spec table orders the rule
+# count first: a list that breaks both bounds is a rule-count problem, and
+# that message is the actionable one.
+# wc -c, not ${#VALUE}: the shells that actually run this disagree on what
+# ${#} means for a multibyte value (BusyBox ash built with unicode support
+# reports characters, dash reports bytes), and the bound is about the bytes
+# the renderer and Postfix handle. Arithmetic expansion normalizes the
+# count, which some wc implementations pad with blanks, into a bare integer
+# for both the comparison and the log field.
+validate_recipient_byte_length() {
+  # Upper bound on a value that carries rules, like the rule count above:
+  # a value that field-splits to ZERO tokens carries none however long its
+  # padding is, and that case belongs to the zero-effective-rules guard in
+  # recipient-filter.sh, which names it precisely ("whitespace only, or every
+  # entry malformed..."). Refusing 16 KiB of spaces here as "too long" would
+  # pre-empt that message with a vaguer one. Same copy-then-`set --` idiom and
+  # same default-IFS/`set -f` premise as validate_recipient_rule_count, so the
+  # split matches the renderer's own iteration.
+  _rr_var=$1
+  _rr_value=$2
+  # shellcheck disable=SC2086
+  set -- $_rr_value
+  if [ $# -eq 0 ]; then
+    return 0
+  fi
+  _rr_bytes=$(printf '%s' "$_rr_value" | wc -c)
+  _rr_bytes=$((_rr_bytes))
+  if [ "$_rr_bytes" -gt "$MAX_RECIPIENT_BYTES" ]; then
+    printf 'level=error msg="RECIPIENT_RESTRICTIONS is longer than this image renders at startup; the whole value is parsed and probed before Postfix binds port 25, so its length is capped at a fixed budget rather than measured per boot (this image renders smtpd_recipient_restrictions itself and exposes no access-map or policy-service setting, so a larger allowlist needs a Postfix deployment of your own configured with a check_recipient_access table or a policy service)" var=%s bytes=%d max_bytes=%d\n' \
+      "$_rr_var" "$_rr_bytes" "$MAX_RECIPIENT_BYTES" >&2
     return 1
   fi
 }
@@ -308,6 +425,46 @@ validate_ipv4_cidr() {
   done
 }
 
+# warn_public_network NET IP PREFIX -- the open-relay guard below rejects the
+# two all-address literals and any prefix under /8, but a /8 (or /16, /32 in
+# IPv6) can still sit entirely inside PUBLIC address space: 192.168.0.0/8
+# masks to 192.0.0.0/8 and authorizes ~16M Internet hosts to relay, and
+# 2000::/16 authorizes a slice of global-unicast IPv6. Postfix accepts both
+# silently and the healthcheck stays green, so the only signal is this warn.
+# Warn, not fatal: a deployment relaying for a public subnet it owns is
+# legitimate, so refusing would be a config-acceptance change.
+# Containment is decided from the leading octets plus the prefix, which is
+# exact for the RFC 1918 / RFC 6598 / RFC 3927 / RFC 4193 / RFC 4291 blocks
+# (an entry inside the block whose prefix is at least the block's prefix is
+# contained, whatever the host bits Postfix masks off).
+warn_public_network() {
+  _wpn_addr=$(printf '%s' "$2" | LC_ALL=C tr 'ABCDEF' 'abcdef')
+  case "$_wpn_addr" in
+    \[*)
+      _wpn_addr="${_wpn_addr#\[}"
+      _wpn_addr="${_wpn_addr%\]}"
+      ;;
+  esac
+  case "$_wpn_addr" in
+    10.*) [ "$3" -ge 8 ] && return 0 ;;
+    127.*) [ "$3" -ge 8 ] && return 0 ;;
+    192.168.*) [ "$3" -ge 16 ] && return 0 ;;
+    169.254.*) [ "$3" -ge 16 ] && return 0 ;;
+    172.1[6-9].* | 172.2[0-9].* | 172.3[01].*) [ "$3" -ge 12 ] && return 0 ;;
+    100.6[4-9].* | 100.[7-9][0-9].* | 100.1[01][0-9].* | 100.12[0-7].*)
+      [ "$3" -ge 10 ] && return 0
+      ;;
+    # IPv6: fc00::/7 (ULA) and fe80::/10 (link-local). The first hextet must
+    # be spelled in full (fc5:: is 0x0fc5, NOT inside fc00::/7), so match four
+    # hex digits followed by the separator.
+    f[cd][0-9a-f][0-9a-f]:*) [ "$3" -ge 7 ] && return 0 ;;
+    fe[89ab][0-9a-f]:*) [ "$3" -ge 10 ] && return 0 ;;
+    ::1) [ "$3" -ge 128 ] && return 0 ;;
+  esac
+  printf 'level=warn msg="ACCEPTED_NETWORKS entry is not inside private address space; every host in that range may relay mail through this server (a mistyped prefix is how a relay accidentally becomes an open relay)" network="%s" prefix=%s\n' \
+    "$(sanitize_token "$1")" "$3" >&2
+}
+
 validate_no_open_relay() {
   for _net in $1; do
     case "$_net" in
@@ -354,6 +511,7 @@ validate_no_open_relay() {
         return 1
         ;;
     esac
+    warn_public_network "$_net" "$_ip" "$_prefix"
   done
 }
 
