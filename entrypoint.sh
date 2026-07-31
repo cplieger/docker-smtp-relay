@@ -957,17 +957,14 @@ write_sasl_secret() {
   # cleanup_sasl_plaintext_or_log and logged the same
   # credentials-may-remain-on-disk error a second time, and a retry that
   # SUCCEEDED emitted no line correcting the first one. abort_sasl_secret is
-  # still armed across this cleanup block, so a signal here still cleans up.
+  # still armed across this cleanup call, so a signal here still cleans up.
+  # No second attempt is made: cleanup_sasl_plaintext is deterministic against
+  # unchanged state (rm, truncate in place, rm again), so an immediate retry
+  # repeats the same operations against the same directory mode and returns the
+  # same status. The EXIT trap's old second call was an artifact of trap
+  # ordering, not a recovery mechanism -- do not restore it.
   trap - EXIT
-  if ! cleanup_sasl_plaintext_or_log; then
-    # Preserve the second removal attempt the disarmed EXIT trap used to make
-    # on `exit 1`, without repeating its identical error line: retry silently
-    # and log only when the retry actually clears the plaintext.
-    if cleanup_sasl_plaintext; then
-      printf 'level=info msg="plaintext SASL credentials removed on retry; aborting startup after initial cleanup failure"\n' >&2
-    fi
-    exit 1
-  fi
+  cleanup_sasl_plaintext_or_log || exit 1
   # Re-arm the startup handler: clearing all traps would leave the rest of
   # startup (postfix checks, upstream probe) without signal handling as PID 1.
   trap startup_abort INT TERM HUP QUIT
