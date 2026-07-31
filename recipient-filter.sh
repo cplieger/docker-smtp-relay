@@ -392,10 +392,14 @@ warn_never_match_rule() {
 # the file header for the three token classes) and append its rendered rule
 # via emit_rcpt_line. Shares the _rcpt_tmp contract with
 # build_recipient_filter: fatal branches remove the temp file and exit 2.
-# Returns 0 for an effective rule, 10 when the entry is a deterministic
-# never-match shape whose line is still emitted (Postfix loads it; no
-# recipient can match it), so an all-never-match list trips the
-# zero-effective-rules guard while a mixed list boots on its valid subset.
+# Returns 0 for an effective rule and 10 (ineffective) otherwise, so an
+# all-ineffective list trips the zero-effective-rules guard while a mixed list
+# boots on its valid subset. The address and domain arms return 10 for a
+# deterministic never-match shape whose line is still emitted (Postfix loads
+# it; no recipient can match it); the regexp arm has no return of its own and
+# propagates emit_regexp_recipient_rule's status only because it is that case
+# arm's LAST command - keep it last, or an uncompilable/unparseable entry
+# starts counting as effective.
 # The address shapes are order-pinned: empty local part before empty domain,
 # so a bare @ classifies as empty-local.
 emit_recipient_rule() {
