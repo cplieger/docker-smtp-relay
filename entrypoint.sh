@@ -952,11 +952,16 @@ write_sasl_secret() {
   # (.lmdb in this image -- hash: maps use LMDB, see Dockerfile). A failed
   # cleanup leaves the plaintext on disk: the wrapper logs a structured error
   # and startup refuses to continue instead of a raw set -e death.
-  cleanup_sasl_plaintext_or_log || exit 1
-  # Drop only the EXIT cleanup trap and re-arm the startup handler: clearing
-  # all traps here would leave the rest of startup (postfix checks, upstream
-  # probe) without signal handling as PID 1.
+  # Drop the EXIT cleanup trap BEFORE the explicit removal so a failure here
+  # is reported exactly once: with the trap still armed, `exit 1` re-entered
+  # cleanup_sasl_plaintext_or_log and logged the same
+  # credentials-may-remain-on-disk error a second time, and a retry that
+  # SUCCEEDED emitted no line correcting the first one. abort_sasl_secret is
+  # still armed across these two lines, so a signal here still cleans up.
   trap - EXIT
+  cleanup_sasl_plaintext_or_log || exit 1
+  # Re-arm the startup handler: clearing all traps would leave the rest of
+  # startup (postfix checks, upstream probe) without signal handling as PID 1.
   trap startup_abort INT TERM HUP QUIT
 
   printf 'level=info msg="SASL authentication configured"\n' >&2
@@ -1013,13 +1018,12 @@ probe_relay_tcp() {
   # not canonicalize the representation: a leading-zero value (08, 09) is
   # read as octal by POSIX shell arithmetic and errors out, which would make
   # the fail-soft wrapper report a false "unreachable". Strip leading zeroes
-  # before the value enters $((...)). The validated range makes an all-zero
-  # value impossible; the :-0 fallback is purely defensive.
+  # before the value enters $((...)). validate_range's min of 1 rejects every
+  # all-zero spelling (0, 00, 000), so the strip can never empty the value.
   _probe_timeout=$STARTUP_PROBE_TIMEOUT
   while [ "${_probe_timeout#0}" != "$_probe_timeout" ]; do
     _probe_timeout=${_probe_timeout#0}
   done
-  _probe_timeout=${_probe_timeout:-0}
   printf 'QUIT\r\n' | timeout -k 2 "$((_probe_timeout + 2))" nc -w "$_probe_timeout" "$1" "$2" >/dev/null 2>&1
 }
 

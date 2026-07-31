@@ -160,7 +160,7 @@ check_ok recipients-mixed-malformed \
 # Mixed valid + deterministic never-match domain: the container still starts
 # on the valid subset. The leading-dot domain is warned, still rendered (a
 # dead line no recipient can ever match), and excluded from the
-# effective-rule count (2026-07 decision).
+# effective-rule count.
 check_ok recipients-mixed-never-match \
   RELAY_HOST=smtp.example.com \
   "RECIPIENT_RESTRICTIONS=user@example.com .example.com"
@@ -168,7 +168,7 @@ check_ok recipients-mixed-never-match \
 # Mixed valid + deterministic never-match ADDRESS shape (dot right after
 # the @): same contract as the domain shape above — the dead entry is
 # warned, still rendered (the map carries both lines + /.*/ REJECT), and
-# excluded from the effective-rule count (2026-07 round-3 decision).
+# excluded from the effective-rule count.
 check_ok recipients-mixed-never-match-address \
   RELAY_HOST=smtp.example.com \
   "RECIPIENT_RESTRICTIONS=user@.example.com valid@example.com"
@@ -356,7 +356,7 @@ check_fail recipients-universal-case-insensitive 2 \
 
 # The structured error line for the universal-pattern rejection is a log
 # contract (names the honest possibly-allow-all heuristic and the split /
-# leave-empty remediations; round-4 wording — it must never claim "matches
+# leave-empty remediations; it must never claim "matches
 # every recipient"); pin it for one case.
 check_log recipients-universal-error-log 2 'matches both universal-match safety probes' \
   RELAY_HOST=smtp.example.com \
@@ -375,7 +375,7 @@ check_ok recipients-optional-suffix-group \
   RELAY_HOST=smtp.example.com \
   "RECIPIENT_RESTRICTIONS=/alerts(|-dev)@example\.com/"
 
-# --- regexp_table(5) dual-pattern and flags forms (round-4) -----------------
+# --- regexp_table(5) dual-pattern and flags forms -------------------------
 # The dual form /pattern1/!/pattern2/ (matches P1 AND NOT P2) is emitted
 # verbatim and counted effective: Postfix parses it natively (verified
 # in-image with postmap -q on the pinned 3.11.5).
@@ -402,9 +402,9 @@ check_log recipients-dual-mixed-rules 0 'rules=3' \
   RELAY_HOST=smtp.example.com \
   "RECIPIENT_RESTRICTIONS=alerts@example.com example.org /.*@example\.net/!/^noreply@/"
 
-# An empty pattern half in a dual construct is fatal, same posture as the
-# landed // empty-pattern arm: an empty half matches every string, so the
-# construct cannot mean what was configured.
+# An empty pattern half in a dual construct is fatal, same posture as the //
+# empty-pattern arm: an empty half matches every string, so the construct
+# cannot mean what was configured.
 check_fail recipients-dual-empty-first-half 2 \
   RELAY_HOST=smtp.example.com \
   "RECIPIENT_RESTRICTIONS=//!/x/"
@@ -414,9 +414,8 @@ check_fail recipients-dual-empty-second-half 2 \
   "RECIPIENT_RESTRICTIONS=/x/!//"
 
 # Flag-suffixed pattern (regexp_table(5) flags, verified set i/m/x): the
-# c11 finding's exact spelling boots as an effective rule emitted verbatim
-# (it used to fall through to the address arm as a silent never-match
-# escaped literal).
+# token boots as an effective rule emitted verbatim, rather than falling
+# through to the address arm as a silent never-match escaped literal.
 check_ok recipients-flags-case-sensitive \
   RELAY_HOST=smtp.example.com \
   "RECIPIENT_RESTRICTIONS=/^alerts@example\.com$/i"
@@ -465,10 +464,8 @@ check_log recipients-unknown-flag 2 'cannot parse regexp token structure' \
   RELAY_HOST=smtp.example.com \
   "RECIPIENT_RESTRICTIONS=/alerts@example\.com/z"
 
-# Unparseable structure (mid-token unescaped delimiters — the round-4
-# replacement for the old unescaped-delimiter heuristic and its inaccurate
-# "Postfix will ignore this rule" wording): warn + suppressed; all-such
-# exits 2 via the zero-effective-rules guard.
+# Unparseable structure (mid-token unescaped delimiters): warn + suppressed;
+# all-such exits 2 via the zero-effective-rules guard.
 check_log recipients-unparseable-structure 2 'cannot parse regexp token structure' \
   RELAY_HOST=smtp.example.com \
   "RECIPIENT_RESTRICTIONS=/a/b/c/"
@@ -506,7 +503,7 @@ check_fail recipients-all-malformed-parens 2 \
 # renders a rule Postfix loads but no recipient can ever match (no address
 # contains @.), so zero EFFECTIVE rules must trip the zero-rules guard —
 # the same operator outcome as the all-malformed list, reached through
-# rules Postfix loads-but-never-matches (2026-07 decision).
+# rules Postfix loads-but-never-matches.
 check_fail recipients-all-never-match 2 \
   RELAY_HOST=smtp.example.com \
   RECIPIENT_RESTRICTIONS=.example.com
@@ -520,7 +517,7 @@ check_fail recipients-all-never-match-slash 2 \
 
 # Every entry a deterministic never-match ADDRESS shape (dot-after-@,
 # empty local part, empty domain): zero EFFECTIVE rules must trip the
-# zero-rules guard, same as the domain shapes (2026-07 round-3 decision).
+# zero-rules guard, same as the domain shapes.
 check_fail recipients-all-never-match-address 2 \
   RELAY_HOST=smtp.example.com \
   "RECIPIENT_RESTRICTIONS=user@.example.com @example.com user@"
@@ -772,12 +769,11 @@ check_relay_host_warn relay-host-bracketed-hostport '[smtp.example.com:587]' 1
 check_relay_host_warn relay-host-bracketed-ipv6 '[2001:db8::1]' 0
 
 # --- parse_regexp_construct linearity regression ---------------------------
-# The structured parser must stay linear in the token length: the earlier
-# per-character shell loop copied both the shrinking suffix and the growing
-# prefix on every character, so a 5 KiB pattern held pre-start validation
-# for ~100s in the built image (RECIPIENT_RESTRICTIONS has no length
-# bound). Build an 8 KiB literal pattern, parse it under a hard 5s
-# deadline, and assert the extracted first half is byte-identical.
+# The parser must stay linear in the token length: validate.sh's
+# MAX_RECIPIENT_BYTES (16384) deliberately admits a single ~8 KiB regexp
+# construct, and a quadratic scan at that length holds PID 1 in pre-start
+# validation for minutes. Build an 8 KiB literal pattern, parse it under a
+# hard 5s deadline, and assert the extracted first half is byte-identical.
 check_parse_linear() {
   _name=$1
   _pat=''

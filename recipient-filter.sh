@@ -377,27 +377,27 @@ emit_regexp_recipient_rule() {
   return "$_rcpt_status"
 }
 
-# emit_recipient_rule ENTRY — classify one RECIPIENT_RESTRICTIONS token
-# (leading-/ regexp-family construct, full address, or domain) and append
-# its rendered rule via emit_rcpt_line. Any token STARTING with / routes to
-# the regexp arm (which owns the full structure parse: plain, flags, dual);
-# a mid-token slash without a leading slash is legal RFC 5321 atext and
-# keeps its literal arm — john/doe@example.com is a correct address-arm
-# literal, escaped and never warned. Shares the _rcpt_tmp contract with
+# warn_never_match_rule MSG ENTRY -- single source of the never-match warn log
+# contract plus the shared ineffective-status bookkeeping, the literal-arm
+# counterpart of warn_uncompilable_half. A shape that forgets the status
+# assignment counts as an effective rule and defeats the zero-effective-rules
+# guard, so the two live in one place.
+warn_never_match_rule() {
+  printf 'level=warn msg="recipient restriction %s" entry="%s"\n' \
+    "$1" "$(sanitize_token "$2")" >&2
+  _rcpt_status=10
+}
+
+# emit_recipient_rule ENTRY — classify one RECIPIENT_RESTRICTIONS token (see
+# the file header for the three token classes) and append its rendered rule
+# via emit_rcpt_line. Shares the _rcpt_tmp contract with
 # build_recipient_filter: fatal branches remove the temp file and exit 2.
-# Returns 0 for an effective rule; the regexp arm is its case arm's last
-# command, so it propagates emit_regexp_recipient_rule's ineffective
-# status (10). The address arm's
-# three deterministic never-match shapes (empty local part, empty domain,
-# dot-after-@ — order-pinned so a bare @ classifies as empty-local) and the
-# domain arm's two (slash-bearing token, leading dot) warn, still emit the
-# rule line unchanged, and return 10 (ineffective) — same status-10 contract
-# as the regexp arms, so an all-never-match list trips the zero-effective-
-# rules guard while a mixed list still boots on its valid subset. Excluding
-# deterministic never-match domain and address shapes from the effective
-# count is an explicit user decision; the warns themselves are shape hints,
-# not load failures — Postfix still loads these lines, it just never
-# matches them.
+# Returns 0 for an effective rule, 10 when the entry is a deterministic
+# never-match shape whose line is still emitted (Postfix loads it; no
+# recipient can match it), so an all-never-match list trips the
+# zero-effective-rules guard while a mixed list boots on its valid subset.
+# The address shapes are order-pinned: empty local part before empty domain,
+# so a bare @ classifies as empty-local.
 emit_recipient_rule() {
   case "$1" in
     *[[:space:]]*)
@@ -431,19 +431,13 @@ emit_recipient_rule() {
       _local="${1%@*}"
       _domain="${1##*@}"
       if [ -z "$_local" ]; then
-        printf 'level=warn msg="recipient restriction address has an empty local part; this anchored rule never matches a recipient smtpd presents" entry="%s"\n' \
-          "$(sanitize_token "$1")" >&2
-        _rcpt_status=10
+        warn_never_match_rule "address has an empty local part; this anchored rule never matches a recipient smtpd presents" "$1"
       elif [ -z "$_domain" ]; then
-        printf 'level=warn msg="recipient restriction address has an empty domain; Postfix rejects domain-less recipients before the access-map lookup, so this rule will never match any recipient" entry="%s"\n' \
-          "$(sanitize_token "$1")" >&2
-        _rcpt_status=10
+        warn_never_match_rule "address has an empty domain; Postfix rejects domain-less recipients before the access-map lookup, so this rule will never match any recipient" "$1"
       else
         case "$_domain" in
           .*)
-            printf 'level=warn msg="recipient restriction address domain starts with a dot (no deliverable address contains @.); this rule will never match any recipient" entry="%s"\n' \
-              "$(sanitize_token "$1")" >&2
-            _rcpt_status=10
+            warn_never_match_rule "address domain starts with a dot (no deliverable address contains @.); this rule will never match any recipient" "$1"
             ;;
         esac
       fi
@@ -463,14 +457,10 @@ emit_recipient_rule() {
       _rcpt_status=0
       case "$1" in
         */*)
-          printf 'level=warn msg="recipient restriction looks like a mis-typed regexp (a domain cannot contain /); this rule will never match any recipient" entry="%s"\n' \
-            "$(sanitize_token "$1")" >&2
-          _rcpt_status=10
+          warn_never_match_rule "looks like a mis-typed regexp (a domain cannot contain /); this rule will never match any recipient" "$1"
           ;;
         .*)
-          printf 'level=warn msg="recipient restriction domain starts with a dot (Postfix subdomain syntax is not supported by this regexp map; no address contains @.); this rule will never match any recipient" entry="%s"\n' \
-            "$(sanitize_token "$1")" >&2
-          _rcpt_status=10
+          warn_never_match_rule "domain starts with a dot (Postfix subdomain syntax is not supported by this regexp map; no address contains @.); this rule will never match any recipient" "$1"
           ;;
       esac
       emit_escaped_literal_rule '/@' "$1"
