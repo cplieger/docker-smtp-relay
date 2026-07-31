@@ -202,6 +202,12 @@ STARTUP_PROBE_TIMEOUT:nl,num,range=1:10
     eval "_value=\${$_var}"
     _oldIFS=$IFS
     IFS=,
+    # The for-list is split ONCE with IFS=, (comma-separated check tokens), so
+    # restoring IFS inside the body is safe — and load-bearing: the rcptrules /
+    # rcptbytes validators field-split their value with `set -- $2` and need the
+    # default IFS. With IFS still "," a space-separated RECIPIENT_RESTRICTIONS
+    # counts as ONE token and the 256-rule cap never fires (300 rules render and
+    # boot). The reset after the loop is the empty-$_checks case, not a duplicate.
     for _chk in $_checks; do
       IFS=$_oldIFS
       validate_field_check "$_var" "$_value" "$_chk" || exit 2
