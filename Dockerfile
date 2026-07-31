@@ -421,6 +421,12 @@ EXPOSE 25
 # hadolint ignore=DL3002
 USER 0:0
 
+# DL3025 wants JSON notation, which cannot run this: the probe pipes nc's
+# banner into grep and redirects stdin from /dev/null. Exec form supports
+# neither, and this image runs Postfix behind a shell entrypoint, so it will
+# never be shell-less -- the distroless case the rule guards does not arise
+# here.
+# hadolint ignore=DL3025
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=15s \
     CMD nc -w 3 127.0.0.1 25 < /dev/null | grep -q '^220 ' || exit 1
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
