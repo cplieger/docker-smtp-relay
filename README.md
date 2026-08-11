@@ -341,7 +341,7 @@ The entrypoint pins `compatibility_level = 3.6`, so new Postfix defaults are ado
 
 ## Credits
 
-This project packages [Postfix](https://github.com/vdukhovni/postfix) into a container image. All credit for the core functionality goes to the upstream maintainers.
+This project packages [Postfix](https://github.com/vdukhovni/postfix) into a container image. Postfix is dual-licensed: you can take it under either the Eclipse Public License 2.0 or the IBM Public License 1.0. All credit for the core functionality goes to the upstream maintainers.
 
 ## Contributing
 
@@ -356,4 +356,4 @@ This project was built with AI-assisted tooling using [Claude](https://claude.co
 
 ## License
 
-GPL-3.0-or-later. See [LICENSE](LICENSE).
+Apache-2.0. See [LICENSE](LICENSE).
