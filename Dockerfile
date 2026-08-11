@@ -5,12 +5,12 @@
 # vX.Y.Z). versioning=semver keeps Renovate off the repo's ancient non-semver
 # v20010228* historical tags, which semver-coerced ordering would rank higher.
 # renovate: datasource=github-tags depName=vdukhovni/postfix versioning=semver
-ARG POSTFIX_VERSION=v3.11.5
+ARG POSTFIX_VERSION=v3.11.6
 # Renovate's github-tags datasource exposes the git sha, not the tarball
 # hash, so the repin postUpgradeTask recomputes this SHA256 from the marker
 # URL below and commits it alongside the POSTFIX_VERSION bump.
 # repin: dep=vdukhovni/postfix url=https://high5.nl/mirrors/postfix-release/official/postfix-{version_nov}.tar.gz
-ARG POSTFIX_SHA256=4a6ab3d0e9390989fa201fc6c446045fc702c4e16e7a247c3ae261c9e9bee610
+ARG POSTFIX_SHA256=b9a748705b1cab0a4afcbe42f934c82a33b342ba3229017fb508c71700078d07
 
 # ---------------------------------------------------------------------------
 # Builder stage - compiles Postfix from the pinned upstream source tarball
