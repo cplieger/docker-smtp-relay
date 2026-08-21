@@ -16,7 +16,7 @@ Accepts email from services on your local network and forwards it through a real
 **Example use cases:**
 
 - **AWS SES**: Set `RELAY_HOST=email-smtp.us-east-1.amazonaws.com` with your IAM SMTP credentials. Services on your LAN send to port 25; the relay handles SES authentication and TLS.
-- **Gmail**: Set `RELAY_HOST=smtp.gmail.com` with an App Password. Useful for sending alerts from devices that don't support OAuth2.
+- **Gmail**: Set `RELAY_HOST=smtp.gmail.com` with an App Password. Paste the password as Google issues it, spaces included (`wxyz abcd efgh aabb`); quote it in YAML. Useful for sending alerts from devices that don't support OAuth2.
 - **Mailgun / Sendgrid / Generic SMTP**: Any provider that accepts SMTP with STARTTLS on port 587 works out of the box.
 - **Multi-service self-hosted**: NAS notifications, Grafana alerts, Paperless-ngx, Uptime Kuma, IoT devices; point them all at `<host-ip>:25`.
 
@@ -59,8 +59,8 @@ services:
 | Variable | Description | Default | Required |
 | --- | --- | --- | --- |
 | `RELAY_HOST` | Upstream SMTP relay hostname; works with any provider (e.g. email-smtp.us-east-1.amazonaws.com for AWS SES, smtp.gmail.com for Gmail, smtp.mailgun.org for Mailgun) | _none_ | Yes |
-| `RELAY_LOGIN` | SASL username for the upstream relay. Optional, but must be set together with RELAY_PASSWORD (set neither to relay without SASL, e.g. to an IP-authenticated smarthost). Most hosted providers (SES, Gmail, Mailgun) require both. | _(unset)_ | No |
-| `RELAY_PASSWORD` | SASL password for the upstream relay. Optional; see RELAY_LOGIN (both-or-neither). | _(unset)_ | No |
+| `RELAY_LOGIN` | SASL username for the upstream relay. Optional, but must be set together with RELAY_PASSWORD (set neither to relay without SASL, e.g. to an IP-authenticated smarthost). Most hosted providers (SES, Gmail, Mailgun) require both. Must not contain a colon, must not start with whitespace, and must not end with a newline; whitespace inside or after the login is kept. | _(unset)_ | No |
+| `RELAY_PASSWORD` | SASL password for the upstream relay. Optional; see RELAY_LOGIN (both-or-neither). Spaces inside the password are preserved, so a Gmail App Password can be pasted exactly as Google issues it (`wxyz abcd efgh aabb`). Only TRAILING whitespace is rejected, because the credential map trims it and the relay would then send a password that differs from the one configured. | _(unset)_ | No |
 | `RELAY_PORT` | Upstream relay port: 587 for STARTTLS, 465 for implicit TLS. 465 requires a mandatory `SMTP_TLS_SECURITY_LEVEL` (`encrypt` or stronger, including `dane-only` and `fingerprint`); `none`, `may`, and `dane` are rejected with it. | `587` | No |
 | `SMTP_TLS_SECURITY_LEVEL` | Outbound TLS level: `secure` (default; chain + hostname verification), `verify`, `encrypt`, `dane`/`dane-only`/`fingerprint` (see [TLS security levels](#tls-security-levels)), `may`, or `none`. See the [Postfix TLS README](https://www.postfix.org/TLS_README.html). Prefer `secure`/`verify` when SASL (`RELAY_LOGIN`/`RELAY_PASSWORD`) is set; `encrypt` and weaker lack peer authentication. | `secure` | No |
 | `SMTP_TLS_FINGERPRINT_CERT_MATCH` | One or more space-separated certificate or public-key digests of the upstream, each formatted as colon-separated hex pairs (see [TLS security levels](#tls-security-levels)). Both-or-neither with `SMTP_TLS_SECURITY_LEVEL=fingerprint`: required at that level, rejected at any other (a silently ignored trust anchor is a misconfiguration). | _(unset)_ | No |
@@ -291,7 +291,12 @@ open-relay CIDR rejection (`0.0.0.0/0` and `::/0` blocked, prefixes ≥/8
 required, and a startup warning when an accepted range is not inside private
 address space, since a mistyped prefix like `192.168.0.0/8` passes the floor
 but covers ~16M public hosts), TLS level allowlisting, and SASL credential
-field-format checks.
+field-format checks (the credential map is `<relayhost> <login>:<password>`, so a
+colon in the login, leading whitespace in the login, a trailing newline in the
+login, or trailing whitespace in the password would each be trimmed or split and
+the relay would authenticate with a credential that differs from the configured
+one; every position the map preserves is accepted, so a Gmail App Password works
+with its spaces exactly as issued).
 Recipient filter entries are regex-escaped before rendering.
 Outbound TLS pins `>=TLSv1.2` and `high` cipher grade; default
 security level is `secure` (chain + hostname verification).

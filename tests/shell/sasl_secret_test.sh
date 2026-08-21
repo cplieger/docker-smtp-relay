@@ -163,6 +163,19 @@ run_write
   && ok "the map record is '<relayhost> <login>:<password>'" \
   || no "sasl_passwd record format" "got '$(cat "$SEEN_CONTENT")'"
 
+# --- 3b. a password with interior spaces reaches postmap verbatim ----------------
+# The Gmail App Password shape (four space-separated groups) that the validators now
+# accept, issue #392. Only the run half writes this record, so render-test cannot see
+# it: the write must quote the value, or postmap would receive a truncated password
+# and every delivery would fail auth at the provider.
+setup
+RELAY_PASSWORD='irzm xpiz qnmq mkal'
+run_write
+[ "$_rc" -eq 0 ] \
+  && [ "$(cat "$SEEN_CONTENT")" = '[smtp.example.com]:587 AKIAEXAMPLE:irzm xpiz qnmq mkal' ] \
+  && ok "a password with interior spaces reaches postmap with every space intact" \
+  || no "spaced password written verbatim" "rc=$_rc, got '$(cat "$SEEN_CONTENT")'"
+
 # --- 4. the plaintext does not survive a successful setup -----------------------
 setup
 run_write

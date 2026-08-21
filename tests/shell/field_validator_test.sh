@@ -289,16 +289,93 @@ accepts "a space-separated list of valid tokens is accepted"
 # --- 9. the SASL field-format checks --------------------------------------------
 # sasl_passwd is parsed by splitting on the first whitespace, then the first colon,
 # so these two validators are deliberately asymmetric and the asymmetry is the point.
+# The map VALUE spans `<login>:<password>`, so only its two outer edges are exposed
+# to postmap's trim: the login's tail and the password's head are interior and
+# survive. Refusing a surviving value is what issue #392 reported, so each arm below
+# corresponds to a measured mangling, and every preserved shape is accepted.
 run validate_sasl_login 'user:name'
-refuses 'msg="RELAY_LOGIN must not contain whitespace or colons"' \
+refuses 'msg="RELAY_LOGIN must not contain a colon' \
   "a colon in RELAY_LOGIN is refused: it would corrupt the sasl_passwd field split"
+run validate_sasl_login ' user'
+refuses 'msg="RELAY_LOGIN must not start with whitespace' \
+  "leading whitespace in RELAY_LOGIN is refused: postmap trims it off the map value"
 run validate_sasl_login 'user name'
-refuses 'msg="RELAY_LOGIN must not contain whitespace or colons"' \
-  "whitespace in RELAY_LOGIN is refused"
-run validate_sasl_password 'pass word'
-refuses 'msg="RELAY_PASSWORD must not contain whitespace"' \
-  "whitespace in RELAY_PASSWORD is refused"
+accepts "whitespace INSIDE RELAY_LOGIN is allowed: postmap stores the map value verbatim"
+run validate_sasl_login 'user '
+accepts "TRAILING whitespace in RELAY_LOGIN is allowed: it sits before the colon, so the trim never reaches it"
+run validate_sasl_login 'AKIAEXAMPLE'
+accepts "an ordinary login passes"
+
+# The one trailing byte the login cannot carry. validate_no_newlines deliberately
+# lets a single trailing newline through, and here it would end the record line
+# before the delimiter, leaving the login with no password at all.
+LOGIN_TRAIL_NL=$(
+  printf 'user\n'
+  printf x
+)
+LOGIN_TRAIL_NL=${LOGIN_TRAIL_NL%x}
+run validate_sasl_login "$LOGIN_TRAIL_NL"
+refuses 'msg="RELAY_LOGIN must not end with a newline' \
+  "a trailing newline in RELAY_LOGIN is refused, unlike a trailing space: it truncates the record"
+
+run validate_sasl_password 'irzm xpiz qnmq mkal'
+accepts "a Gmail App Password with its four space-separated groups is accepted as issued (issue #392)"
+run validate_sasl_password 'pass '
+refuses 'msg="RELAY_PASSWORD must not end with whitespace' \
+  "trailing whitespace in RELAY_PASSWORD is refused: postmap trims it, so the upstream would get a different password"
+run validate_sasl_password ' pass'
+accepts "LEADING whitespace in RELAY_PASSWORD is allowed: it sits after the colon, so the trim never reaches it"
+# A trailing newline is trailing whitespace, so the same arm catches the shape
+# validate_no_newlines deliberately lets through.
+PW_TRAIL_NL=$(
+  printf 'pass\n'
+  printf x
+)
+PW_TRAIL_NL=${PW_TRAIL_NL%x}
+run validate_sasl_password "$PW_TRAIL_NL"
+refuses 'msg="RELAY_PASSWORD must not end with whitespace' \
+  "a trailing newline is refused here, since validate_no_newlines deliberately lets one through"
 run validate_sasl_password 'pass:word'
 accepts "a colon in RELAY_PASSWORD is allowed: the split takes the FIRST colon, so the rest is password"
+
+# The byte contract. `[[:space:]]` is locale-sensitive, and the shells that run this
+# disagree about what it covers, so pin the classes separately: every ASCII
+# whitespace byte must be refused where postmap trims it and accepted where it
+# survives. A non-ASCII space must never be refused, because Postfix's own ISSPACE
+# is ASCII-gated and treats it as ordinary content. Re-measured under BusyBox ash in
+# the shipped image, where these validators actually run.
+_ws_bad=''
+for _ws_name in space tab vtab formfeed cr; do
+  case "$_ws_name" in
+    space) _ws=' ' ;;
+    tab) _ws=$(printf '\t') ;;
+    vtab) _ws=$(printf '\v') ;;
+    formfeed) _ws=$(printf '\f') ;;
+    cr) _ws=$(printf '\r') ;;
+  esac
+  # Password: the value's trailing edge is trimmed; its head and middle are not.
+  run validate_sasl_password "pass${_ws}"
+  [ "$_rc" -ne 0 ] || _ws_bad="$_ws_bad pass-trailing-$_ws_name"
+  run validate_sasl_password "${_ws}pass"
+  [ "$_rc" -eq 0 ] || _ws_bad="$_ws_bad pass-leading-$_ws_name"
+  run validate_sasl_password "pa${_ws}ss"
+  [ "$_rc" -eq 0 ] || _ws_bad="$_ws_bad pass-interior-$_ws_name"
+  # Login: mirrored. Its leading edge is trimmed; its tail and middle are not.
+  run validate_sasl_login "${_ws}user"
+  [ "$_rc" -ne 0 ] || _ws_bad="$_ws_bad login-leading-$_ws_name"
+  run validate_sasl_login "user${_ws}"
+  [ "$_rc" -eq 0 ] || _ws_bad="$_ws_bad login-trailing-$_ws_name"
+  run validate_sasl_login "us${_ws}er"
+  [ "$_rc" -eq 0 ] || _ws_bad="$_ws_bad login-interior-$_ws_name"
+done
+[ -z "$_ws_bad" ] \
+  && ok "every ASCII whitespace byte (space tab VT FF CR) is refused exactly where postmap trims it and accepted where it survives" \
+  || no "ASCII whitespace byte contract" "misclassified:$_ws_bad"
+
+# U+00A0 NO-BREAK SPACE. Postfix does not treat it as whitespace, so it is content
+# and must not be refused; pinning it keeps a future validator from widening the
+# class past what the parser actually trims.
+run validate_sasl_password "$(printf 'pass\302\240')"
+accepts "a non-ASCII space (U+00A0) is content, not whitespace: Postfix's ISSPACE is ASCII-gated"
 
 report

@@ -594,14 +594,58 @@ validate_fingerprint_match() {
   done
 }
 
-# Reject SASL credentials that would break the sasl_passwd field format
-# (`<host> <user>:<password>` parsed by splitting on first whitespace, then
-# on first colon). Whitespace in either field, or a colon in the login,
-# silently corrupts the hash map.
+# Reject exactly the SASL credential shapes the sasl_passwd map cannot carry, and
+# nothing else. The record is `<relayhost> <login>:<password>`: postmap(1) ends the
+# KEY at the first unquoted whitespace, then trims leading and trailing whitespace
+# from the VALUE, and smtp_sasl_passwd_lookup splits that value at the first
+# smtp_sasl_passwd_res_delim (`:`). The value spans `<login>:<password>`, so only
+# its two outer edges are exposed to the trim: everything between them, INCLUDING
+# the login's tail and the password's head, is interior and survives verbatim.
+# Measured against the Postfix pinned in this image (postmap + postmap -q), and
+# re-measured in the shipped image under BusyBox ash:
+#   MANGLED, so the credential can never authenticate  -> fatal
+#     login leading whitespace     ` user`     -> `user`      trimmed (5B -> 4B)
+#     password trailing whitespace `trailing ` -> `trailing`  trimmed (9B -> 8B)
+#     colon anywhere in the login  `us:er`     -> `us`        first-colon split
+#     login trailing newline       `user\n`    -> ends the record line before the
+#                                                 delimiter, so the login lands
+#                                                 with no password at all
+#   PRESERVED byte-for-byte -> accepted, because refusing a value that works is
+#   what issue #392 was:
+#     password interior whitespace `a b c d`   (the Gmail App Password shape)
+#     password leading whitespace  ` leading`
+#     login interior whitespace    `first last`
+#     login trailing whitespace    `user `     (space/tab/VT/FF/CR; not newline)
+#     colon anywhere in the password           (split takes the FIRST colon only)
+# The fatal set is Tier 2 by the policy above: each entry is a documented
+# never-works combination, not a taste judgment. The preserved set stays Tier 3 --
+# the operator's business, exactly like a typo'd hostname -- so an outer space that
+# survives the map is NOT refused here even though it is more often a paste
+# artifact than a credential. An earlier revision of this fix did refuse those two
+# positions as hygiene; that was a new fatal shape arm without a Tier 1/2
+# justification, which this policy forbids, and it repeated in miniature the defect
+# #392 reported.
+#
+# "Whitespace" means ASCII whitespace throughout: Postfix's own ISSPACE is
+# ASCII-gated, so U+00A0 and friends are ordinary content to the parser and to
+# these validators (measured: accepted).
 validate_sasl_login() {
   case "$1" in
-    *[[:space:]]* | *:*)
-      printf 'level=error msg="RELAY_LOGIN must not contain whitespace or colons"\n' >&2
+    *:*)
+      printf 'level=error msg="RELAY_LOGIN must not contain a colon; the sasl_passwd value is split at the first colon, so the login would be cut short and no delivery could authenticate"\n' >&2
+      return 1
+      ;;
+    [[:space:]]*)
+      printf 'level=error msg="RELAY_LOGIN must not start with whitespace; postmap trims it off the map value, so the login sent upstream would differ from the one configured (whitespace inside or after the login is kept)"\n' >&2
+      return 1
+      ;;
+    # A trailing newline survives validate_no_newlines' deliberate one-newline
+    # carve-out, and unlike other trailing whitespace it ends the record line
+    # before the delimiter, leaving the login with no password. Literal newline in
+    # the pattern, same idiom as validate_no_newlines' strip above.
+    *"
+")
+      printf 'level=error msg="RELAY_LOGIN must not end with a newline; it would end the credential record before the password and no delivery could authenticate"\n' >&2
       return 1
       ;;
   esac
@@ -609,8 +653,8 @@ validate_sasl_login() {
 
 validate_sasl_password() {
   case "$1" in
-    *[[:space:]]*)
-      printf 'level=error msg="RELAY_PASSWORD must not contain whitespace"\n' >&2
+    *[[:space:]])
+      printf 'level=error msg="RELAY_PASSWORD must not end with whitespace; postmap trims it off the map value, so the password sent upstream would differ from the one configured (whitespace INSIDE or BEFORE the password is kept, so a Gmail App Password works exactly as issued)"\n' >&2
       return 1
       ;;
   esac
