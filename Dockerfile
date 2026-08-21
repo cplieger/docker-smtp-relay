@@ -19,10 +19,18 @@ ARG POSTFIX_SHA256=b9a748705b1cab0a4afcbe42f934c82a33b342ba3229017fb508c71700078
 # fail-closed either way) with feature parity to Alpine 3.24's
 # main/postfix package, mirroring its APKBUILD makedefs selections: TLS
 # (openssl), Cyrus SASL client auth, PCRE2, LMDB as the default database type
-# with Berkeley DB disabled (hash:/btree: maps transparently use LMDB - see
-# Postfix's NON_BERKELEYDB_README; the entrypoint's `hash:` sasl_passwd map
-# depends on this; its TLS session cache is an explicit lmdb: map), NIS off, and
-# EAI/SMTPUTF8 on (makedefs auto-detects icu-dev). The LDAP/MySQL/PgSQL/
+# with Berkeley DB disabled, NIS off, and
+# EAI/SMTPUTF8 on (makedefs auto-detects icu-dev). Because -DNO_DB compiles
+# Berkeley DB out, every generated map must name lmdb: explicitly and never
+# hash: or btree: — those two open FATALLY at runtime ("Berkeley DB support
+# for 'hash:...' is not available for this OS distribution"), and postconf -m
+# still lists them, so only a real map open catches the mistake. Postfix's
+# NON_BERKELEYDB_README does describe a transparent hash:->lmdb: redirect, but
+# only at migration level enable-redirect/enable-reindex, and the shipped
+# default is `disable` (`postfix non-bdb status`); its own guidance is to
+# replace hard-coded hash: with the default database type. Both generated maps
+# obey that: the sasl_passwd map and the TLS session cache are explicit lmdb:.
+# The LDAP/MySQL/PgSQL/
 # SQLite backends that Alpine splits into subpackages (never installed by
 # this image) are skipped, and map types are compiled in statically
 # (dynamicmaps=no) instead of split into plugin .so files. The postfix user
@@ -311,7 +319,10 @@ RUN ln -f /usr/sbin/sendmail /usr/bin/newaliases \
 # shipped, JSON-shaped, naming postfix at the same ARG-pinned version;
 # TLS, Cyrus SASL client, and
 # EAI/SMTPUTF8 compiled in; every map type the generated config relies on
-# (hash:/btree: on lmdb, regexp:, plus cidr and pcre) present; setgid
+# (lmdb:, regexp:, plus cidr and pcre) present, and the rendered SASL map
+# proven OPENABLE through the exact spec the entrypoint emits (hash: and
+# btree: are listed by postconf -m but fatal to open in this -DNO_DB build);
+# setgid
 # postdrop plumbing intact after COPY; toolchain hardening (PIE, non-exec
 # stack, RELRO + BIND_NOW, stack protector) present on the shipped daemons;
 # and a boot-shaped sequence (render to
@@ -359,7 +370,12 @@ RUN ENTRYPOINT_DIR=/usr/local/bin sh /tmp/tests/render-test.sh \
     && { grep -qx cyrus /tmp/sasl-client-types \
       || { printf '%s\n' 'FAIL: cyrus missing from postconf -A (SASL client auth not compiled in)' >&2; exit 1; }; } \
     && postconf -m >/tmp/map-types \
-    && for m in btree cidr hash lmdb pcre regexp; do \
+    # Only the types the generated config names. hash and btree are
+    # deliberately absent: postconf -m lists them, but -DNO_DB makes opening
+    # one fatal, so asserting their presence would pin a capability this image
+    # does not have (see the makedefs note at the top and the openable-map
+    # assertion below).
+    && for m in cidr lmdb pcre regexp; do \
          grep -qx "$m" /tmp/map-types \
            || { printf 'FAIL: map type %s missing from postconf -m\n' "$m" >&2; exit 1; }; \
        done \
@@ -400,6 +416,33 @@ RUN ENTRYPOINT_DIR=/usr/local/bin sh /tmp/tests/render-test.sh \
     && postmap /tmp/sasl-probe \
     && { test -f /tmp/sasl-probe.lmdb \
       || { printf '%s\n' 'FAIL: postmap did not produce /tmp/sasl-probe.lmdb (lmdb default map type broken)' >&2; exit 1; }; } \
+    # The rendered SASL map must be OPENABLE, not merely present. -DNO_DB
+    # compiles Berkeley DB out, so a hash:/btree: prefix in main.cf is fatal
+    # at the first lookup and defers every message (dsn=4.3.0) while the
+    # TCP-220 healthcheck stays green. postconf -m still LISTS hash, and
+    # postmap writes .lmdb whatever main.cf says, so neither of the checks
+    # above can see the mismatch: only opening the map spec the entrypoint
+    # actually rendered can. Renders with credentials set, then queries
+    # through that exact spec. Interior spaces in the password ride along,
+    # pinning the issue-392 credential shape end to end in the real image.
+    && env CONF_DIR=/etc/postfix RELAY_HOST=smtp.example.com \
+        RELAY_LOGIN=probe@example.com RELAY_PASSWORD='aaaa bbbb cccc dddd' \
+        sh /usr/local/bin/entrypoint.sh render \
+    && sasl_spec=$(postconf -hx smtp_sasl_password_maps) \
+    && { test -n "$sasl_spec" \
+      || { printf '%s\n' 'FAIL: smtp_sasl_password_maps is empty in a render that set RELAY_LOGIN/RELAY_PASSWORD' >&2; exit 1; }; } \
+    && case "$sasl_spec" in \
+         hash:* | btree:*) \
+           printf 'FAIL: smtp_sasl_password_maps uses a Berkeley DB map type this build cannot open: %s\n' \
+             "$sasl_spec" >&2; exit 1 ;; \
+       esac \
+    && printf '%s\n' 'smtp.example.com probe@example.com:aaaa bbbb cccc dddd' \
+        >"${sasl_spec#*:}" \
+    && postmap "${sasl_spec#*:}" \
+    && { test "$(postmap -q smtp.example.com "$sasl_spec")" = 'probe@example.com:aaaa bbbb cccc dddd' \
+      || { printf 'FAIL: lookup through the rendered map spec %s did not return the credential verbatim (got %s)\n' \
+             "$sasl_spec" "$(postmap -q smtp.example.com "$sasl_spec" 2>&1)" >&2; exit 1; }; } \
+    && rm -f "${sasl_spec#*:}" "${sasl_spec#*:}".lmdb "${sasl_spec#*:}".db \
     && rm -f /tmp/sasl-probe /tmp/sasl-probe.lmdb /tmp/map-types \
         /tmp/sasl-client-types /tmp/smtpd-libs \
     && touch /tmp/tests-passed
