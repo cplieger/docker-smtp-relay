@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # write_sasl_secret() and its helpers: the upstream SASL credentials are written
-# to disk, hashed by postmap, and the plaintext removed again.
+# to disk, indexed by postmap, and the plaintext removed again.
 #
 # This whole path is RUN-MODE ONLY -- `entrypoint.sh render` returns before it, so
 # tests/render-test.sh drives none of it, and a healthy image smoke test never
 # takes a failure branch inside it. What the guards here protect is the file mode
-# of a `hash:` map that stores the relay login AND password verbatim (a table
+# of an indexed map that stores the relay login AND password verbatim (a table
 # format, not a digest): postmap inherits the process umask for a file it CREATES
 # but preserves the mode of one it rewrites in place, so both the stale plaintext
-# and the stale hashed map have to be unlinked before it runs.
+# and the stale indexed map have to be unlinked before it runs.
 #
 # The two mode guards are shadowed by a later belt-and-suspenders `chmod 600`, so
 # a final-mode assertion cannot tell them apart -- it passes with either guard
@@ -59,16 +59,21 @@ load_function write_sasl_secret
 # of it is an external command (`umask 077` then `exec timeout ... postmap`). The
 # stub records what postmap would have SEEN, because that -- not the state of the
 # directory after the function returns -- is what the guards control. It also
-# recreates the .db the way postmap does, so the caller's chmod has a target.
+# recreates the map the way postmap does, so the caller's chmod has a target.
+# Two suffixes, deliberately separate: STALE_SUFFIX is the leftover artifact a case
+# plants and the stub reports on, while the stub always CREATES .lmdb, because that
+# is what real postmap writes in this build whatever was there before (-DNO_DB with
+# DEF_DB_TYPE=lmdb, see compute_sasl_state). Collapsing the two would model a
+# postmap that emits .db, which this image's postmap never does.
 postmap_restricted() {
   stat -c %a "$1" >"$SEEN_MODE" 2>/dev/null || printf 'missing\n' >"$SEEN_MODE"
   cat "$1" >"$SEEN_CONTENT" 2>/dev/null || :
-  if [ -e "$1.db" ]; then
-    printf 'present\n' >"$SEEN_DB"
+  if [ -e "$1$STALE_SUFFIX" ]; then
+    printf 'present\n' >"$SEEN_MAP"
   else
-    printf 'absent\n' >"$SEEN_DB"
+    printf 'absent\n' >"$SEEN_MAP"
   fi
-  : >"$1.db"
+  : >"$1.lmdb"
   return "$STUB_POSTMAP_STATUS"
 }
 
@@ -85,17 +90,18 @@ setup() {
   RELAYHOST_VALUE='[smtp.example.com]:587'
   RELAY_LOGIN=AKIAEXAMPLE
   RELAY_PASSWORD=secret-token
+  STALE_SUFFIX=.lmdb
   STARTUP_CMD_TIMEOUT=30
   STARTUP_CHILD_PID=''
   STUB_POSTMAP_STATUS=0
   SEEN_MODE="$CASE/seen.mode"
-  SEEN_DB="$CASE/seen.db"
+  SEEN_MAP="$CASE/seen.map"
   SEEN_CONTENT="$CASE/seen.content"
   LOG="$CASE/log"
   TIMEOUT_ARGV="$CASE/timeout-argv"
   : >"$TIMEOUT_ARGV"
   : >"$SEEN_MODE"
-  : >"$SEEN_DB"
+  : >"$SEEN_MAP"
   : >"$SEEN_CONTENT"
   : >"$LOG"
 }
@@ -111,18 +117,24 @@ logged() {
   grep -Fq "$1" "$LOG"
 }
 
-# --- 1. the stale hashed map is unlinked BEFORE postmap runs ---------------------
-# Bait the unguarded code would take: a pre-existing 0644 sasl_passwd.db, exactly
-# what a prior image build or a botched restart leaves behind. Without the rm,
-# postmap rewrites that file in place and keeps its mode, so the credentials stay
-# world-readable on the volume.
-setup
-: >"${SASL_PASSWD_FILE}.db"
-chmod 644 "${SASL_PASSWD_FILE}.db"
-run_write
-[ "$(cat "$SEEN_DB")" = absent ] \
-  && ok "a stale sasl_passwd.db is gone before postmap runs, so the umask governs the new map" \
-  || no "stale hashed map unlinked" "postmap saw a pre-existing .db ($(cat "$SEEN_DB")) and would have rewritten it in place"
+# --- 1. the stale indexed map is unlinked BEFORE postmap runs -------------------
+# Bait the unguarded code would take: a pre-existing 0644 map file, exactly what a
+# prior image build or a botched restart leaves behind. Without the rm, postmap
+# rewrites that file in place and keeps its mode, so the credentials stay
+# world-readable on the volume. Run over BOTH suffixes: .lmdb is what this build
+# writes (compute_sasl_state renders an lmdb: map), .db is the downgrade path from
+# an older image, and write_sasl_secret removes both -- so dropping either name
+# from its rm fails here rather than passing on the other one's coverage.
+for _map_suffix in .lmdb .db; do
+  setup
+  STALE_SUFFIX=$_map_suffix
+  : >"${SASL_PASSWD_FILE}${STALE_SUFFIX}"
+  chmod 644 "${SASL_PASSWD_FILE}${STALE_SUFFIX}"
+  run_write
+  [ "$(cat "$SEEN_MAP")" = absent ] \
+    && ok "a stale sasl_passwd${STALE_SUFFIX} is gone before postmap runs, so the umask governs the new map" \
+    || no "stale indexed map unlinked (${STALE_SUFFIX})" "postmap saw a pre-existing ${STALE_SUFFIX} ($(cat "$SEEN_MAP")) and would have rewritten it in place"
+done
 
 # --- 2. the plaintext is CREATED under umask 077, not truncated over a stale file -
 # Same shape of bait on the plaintext half: `>file` truncates but preserves the
@@ -191,11 +203,11 @@ setup
 SASL_PASSWD_FILE="$CASE/no-such-dir/sasl_passwd"
 run_write
 [ "$_rc" -ne 0 ] && logged 'msg="failed to write SASL credentials file"' \
-  && [ "$(cat "$SEEN_DB")" = "" ] \
+  && [ "$(cat "$SEEN_MAP")" = "" ] \
   && ok "a failed credentials write aborts with level=error before postmap runs" \
-  || no "credentials write failure aborts" "rc=$_rc, postmap saw '$(cat "$SEEN_DB")', log: $(cat "$LOG")"
+  || no "credentials write failure aborts" "rc=$_rc, postmap saw '$(cat "$SEEN_MAP")', log: $(cat "$LOG")"
 
-# --- 6. a failed postmap aborts startup instead of booting on an unhashed map ----
+# --- 6. a failed postmap aborts startup instead of booting on an unindexed map ---
 setup
 STUB_POSTMAP_STATUS=1
 run_write
@@ -228,9 +240,9 @@ setup
 RELAY_LOGIN=''
 RELAY_PASSWORD=''
 run_write
-[ "$_rc" -eq 0 ] && [ ! -e "$SASL_PASSWD_FILE" ] && [ ! -s "$SEEN_DB" ] \
+[ "$_rc" -eq 0 ] && [ ! -e "$SASL_PASSWD_FILE" ] && [ ! -s "$SEEN_MAP" ] \
   && ok "with no RELAY_LOGIN/RELAY_PASSWORD the secret path is skipped entirely" \
-  || no "SASL disabled short-circuit" "rc=$_rc, postmap ran=$([ -s "$SEEN_DB" ] && echo yes || echo no)"
+  || no "SASL disabled short-circuit" "rc=$_rc, postmap ran=$([ -s "$SEEN_MAP" ] && echo yes || echo no)"
 
 # --- 10. a termination signal mid-write cleans up AND aborts ---------------------
 # A cleanup-only handler would return control to the run path and let startup
@@ -318,7 +330,7 @@ wait "$_writer" || _rc=$?
 setup
 cat >"$SHIM/postmap" <<'SHIMEOF'
 #!/usr/bin/env bash
-: >"${1:?}.db"
+: >"${1:?}.lmdb"
 SHIMEOF
 chmod +x "$SHIM/postmap"
 TRAPS="$CASE/traps"
@@ -339,7 +351,7 @@ grep -q 'startup_abort' "$TRAPS.term" \
 
 # --- 12. the map file's AT-CREATE-TIME umask, through the REAL postmap_restricted -
 # The stub cases above cover the plaintext half (its umask subshell is inside
-# write_sasl_secret itself); this is the .db half, where the guard lives in
+# write_sasl_secret itself); this is the indexed-map half, where the guard lives in
 # postmap_restricted and a stubbed postmap() would remove it from coverage
 # entirely. The shim records the umask it inherits at the moment postmap would
 # create the map -- the belt-and-suspenders chmod 600 afterwards cannot recover a
@@ -348,7 +360,7 @@ setup
 cat >"$SHIM/postmap" <<'SHIMEOF'
 #!/usr/bin/env bash
 umask >"${UMASK_SEEN:?}"
-: >"${1:?}.db"
+: >"${1:?}.lmdb"
 SHIMEOF
 chmod +x "$SHIM/postmap"
 UMASK_SEEN="$CASE/umask-seen"

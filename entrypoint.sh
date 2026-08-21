@@ -639,15 +639,24 @@ tls_level_wrapper_incompatible() {
 # ---------------------------------------------------------------------------
 # compute_sasl_state — derive the SASL-related main.cf values from whether
 # credentials are present. Pure: writes no secret to disk, so it is safe in
-# render mode. The actual sasl_passwd .db is written by write_sasl_secret.
+# render mode. The actual sasl_passwd map is written by write_sasl_secret.
 # ---------------------------------------------------------------------------
 compute_sasl_state() {
   # SASL_MAPS_LINE is the full main.cf line so the disabled case renders
   # `smtp_sasl_password_maps =` without a trailing space (Postfix reads an
   # empty value as "no map"; a templated empty var would leave whitespace).
+  #
+  # The map type must be lmdb:, not hash:. This image builds Postfix with
+  # -DNO_DB (no Berkeley DB) and -DDEF_DB_TYPE="lmdb", so `postmap <file>`
+  # creates <file>.lmdb, and a hash: PREFIX asks for the one backend that is
+  # compiled out. postconf -m still LISTS hash (the type is known), which is
+  # why a compile-time check cannot see this, but every lookup is fatal at
+  # runtime: "Berkeley DB support for 'hash:...' is not available for this OS
+  # distribution", then smtp_sasl_password_maps lookup error, then every
+  # message deferred with dsn=4.3.0 while the TCP-220 healthcheck stays green.
   if sasl_enabled; then
     RELAY_AUTH_ENABLE="yes"
-    SASL_MAPS_LINE="smtp_sasl_password_maps = hash:${SASL_PASSWD_FILE}"
+    SASL_MAPS_LINE="smtp_sasl_password_maps = lmdb:${SASL_PASSWD_FILE}"
   else
     RELAY_AUTH_ENABLE="no"
     SASL_MAPS_LINE="smtp_sasl_password_maps ="
@@ -923,7 +932,7 @@ write_sasl_secret() {
   # in subshell avoids a brief world-readable window before chmod). Remove any
   # pre-existing plaintext first: redirection to an existing file truncates
   # but preserves its mode, so only the create path honors the umask — same
-  # guard the hashed map gets before postmap below.
+  # guard the indexed map gets before postmap below.
   if ! rm -f "$SASL_PASSWD_FILE"; then
     printf 'level=error msg="failed to remove pre-existing SASL credentials file" path="%s"\n' "$(sanitize_token "$SASL_PASSWD_FILE")" >&2
     exit 1
@@ -934,13 +943,14 @@ write_sasl_secret() {
     exit 1
   fi
   # postmap inherits the process umask, not the source file mode; run it
-  # inside a restrictive umask so a newly created .db file is 0600. But
+  # inside a restrictive umask so a newly created map file is 0600. But
   # postmap rewrites a PRE-EXISTING map in place and preserves its current
   # mode, so a leftover permissive sasl_passwd.db/.lmdb (e.g. 0644 from a
-  # prior image build) would keep exposing the credentials -- 'hash:' names
-  # the table format, not a digest; the map stores login and password
+  # prior image build) would keep exposing the credentials -- the map type
+  # names a table format, not a digest; the map stores login and password
   # verbatim. Remove any pre-existing map first so the umask controls the
-  # recreated file.
+  # recreated file. Both suffixes are swept: this image writes .lmdb (see
+  # compute_sasl_state), and .db covers a map left by an older image.
   if ! rm -f "${SASL_PASSWD_FILE}.db" "${SASL_PASSWD_FILE}.lmdb"; then
     printf 'level=error msg="failed to remove pre-existing SASL map; refusing to let postmap reuse a possibly permissive map file" path="%s"\n' "$(sanitize_token "$SASL_PASSWD_FILE")" >&2
     exit 1
@@ -954,8 +964,9 @@ write_sasl_secret() {
   # Belt-and-suspenders: tighten the regenerated map to 0600 regardless of
   # the database suffix Postfix chose (ignore a missing suffix).
   chmod 600 "${SASL_PASSWD_FILE}.db" "${SASL_PASSWD_FILE}.lmdb" 2>/dev/null || true
-  # Remove plaintext credentials; Postfix only reads the hashed map
-  # (.lmdb in this image -- hash: maps use LMDB, see Dockerfile). A failed
+  # Remove plaintext credentials; Postfix only reads the indexed map
+  # (.lmdb in this image: compute_sasl_state renders an lmdb: map because
+  # -DNO_DB compiles Berkeley DB out). A failed
   # cleanup leaves the plaintext on disk: the wrapper logs a structured error
   # and startup refuses to continue instead of a raw set -e death.
   # Drop the EXIT cleanup trap BEFORE the explicit removal so a failure here
@@ -1198,7 +1209,7 @@ case "$MODE" in
         "$(sanitize_token "$CONF_DIR")" >&2
     fi
     write_sasl_secret
-    # Credentials are persisted in the 0600 hashed map; drop the env copies so
+    # Credentials are persisted in the 0600 indexed map; drop the env copies so
     # they do not linger in /proc/1/environ for the container's lifetime. This is
     # a one-way door: sasl_enabled -- and any other RELAY_LOGIN/RELAY_PASSWORD
     # read -- is unusable past this point, because under set -u an unset variable

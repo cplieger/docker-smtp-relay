@@ -245,6 +245,43 @@ check_ok smtpd-tls-encrypt \
   SMTPD_TLS_KEY_FILE=/certs/smtpd.key \
   SMTPD_TLS_SECURITY_LEVEL=encrypt
 
+# The SASL map type is load-bearing, and its golden diff reads as cosmetic:
+# this image builds Postfix with -DNO_DB, so a hash:/btree: prefix opens FATALLY
+# at the first lookup and every message defers with dsn=4.3.0 while the TCP-220
+# healthcheck stays green. Assert the rendered prefix directly, so a regression
+# names the cause instead of showing a one-word fixture diff.
+check_sasl_map_type() {
+  _tmp=$(mktemp -d)
+  if env -i PATH="$PATH" CONF_DIR="$_tmp" \
+    RELAY_HOST=smtp.example.com RELAY_LOGIN=user "RELAY_PASSWORD=aaaa bbbb cccc dddd" \
+    sh "$ENTRYPOINT" render >/dev/null 2>&1; then
+    # Guard the capture: under `set -eu` a grep that matches nothing would exit
+    # the whole suite here, losing both the tally and the reason.
+    if _line=$(grep '^smtp_sasl_password_maps' "$_tmp/main.cf"); then
+      case "$_line" in
+        "smtp_sasl_password_maps = lmdb:$_tmp/sasl_passwd")
+          pass=$((pass + 1))
+          ;;
+        *)
+          printf 'FAIL sasl-map-type: rendered "%s", expected an lmdb: map (hash:/btree: cannot be opened in this build)\n' \
+            "$_line" >&2
+          fail=$((fail + 1))
+          ;;
+      esac
+    else
+      printf 'FAIL sasl-map-type: render produced no smtp_sasl_password_maps line at all\n' >&2
+      fail=$((fail + 1))
+    fi
+  else
+    _rc=$?
+    printf 'FAIL sasl-map-type: render exited %d, expected 0\n' "$_rc" >&2
+    fail=$((fail + 1))
+  fi
+  rm -rf "$_tmp"
+}
+
+check_sasl_map_type
+
 # --- Rejected configurations (exit 2) -------------------------------------
 check_fail no-relay-host 2 \
   RELAY_HOST=
