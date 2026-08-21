@@ -41,8 +41,8 @@ readonly MAIN_CF="${CONF_DIR}/main.cf"
 # CONF_DIR                         string    /etc/postfix         no newlines/metacharacters (rendered into main.cf paths)
 # RELAY_HOST                       string    (required)           no newlines/metacharacters; non-empty; well-formed [brackets] (host:port warned)
 # RELAY_PORT                       integer   587                  1-65535
-# RELAY_LOGIN                      string    ""                   no whitespace or colons
-# RELAY_PASSWORD                   string    ""                   no whitespace
+# RELAY_LOGIN                      string    ""                   no colons; no leading whitespace; no trailing newline (interior/trailing whitespace is kept)
+# RELAY_PASSWORD                   string    ""                   no trailing whitespace (interior and leading whitespace are kept, e.g. a Gmail App Password)
 # RECIPIENT_RESTRICTIONS           string    ""                   space-separated; addresses, domains, or regexp constructs (/P/, /P/flags, /P1/[flags]!/P2/[flags]); max 256 rules, max 16384 bytes
 # SMTP_TLS_SECURITY_LEVEL          enum      secure               one of $TLS_LEVELS (see validate.sh); not none/may/dane with RELAY_PORT=465; fingerprint requires SMTP_TLS_FINGERPRINT_CERT_MATCH
 # SMTP_TLS_FINGERPRINT_CERT_MATCH  string    ""                   space-separated digests, each colon-separated hex pairs; both-or-neither with level=fingerprint

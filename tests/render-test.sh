@@ -294,6 +294,43 @@ check_fail partial-sasl 2 \
   RELAY_HOST=smtp.example.com \
   RELAY_LOGIN=user
 
+# SASL credential field format (issue #392). The map record is
+# `<relayhost> <login>:<password>` and postmap trims only the value's ends, so
+# interior spaces round-trip and a Gmail App Password must boot as issued, while
+# whitespace at either end is refused because postmap would silently drop it.
+check_log gmail-app-password 0 'msg="input validation passed"' \
+  RELAY_HOST=smtp.gmail.com \
+  RELAY_LOGIN=user@gmail.com \
+  "RELAY_PASSWORD=irzm xpiz qnmq mkal"
+
+check_log sasl-password-trailing-space 2 'RELAY_PASSWORD must not end with whitespace' \
+  RELAY_HOST=smtp.example.com \
+  RELAY_LOGIN=user \
+  "RELAY_PASSWORD=pass "
+
+# Leading whitespace in the password sits AFTER the colon, so it is interior to the
+# map value and postmap's trim never reaches it. It boots.
+check_log sasl-password-leading-space 0 'msg="input validation passed"' \
+  RELAY_HOST=smtp.example.com \
+  RELAY_LOGIN=user \
+  "RELAY_PASSWORD= pass"
+
+check_log sasl-login-leading-space 2 'RELAY_LOGIN must not start with whitespace' \
+  RELAY_HOST=smtp.example.com \
+  "RELAY_LOGIN= user" \
+  RELAY_PASSWORD=pass
+
+# ... and its mirror: the login's TRAILING whitespace is interior to the value too.
+check_log sasl-login-trailing-space 0 'msg="input validation passed"' \
+  RELAY_HOST=smtp.example.com \
+  "RELAY_LOGIN=user " \
+  RELAY_PASSWORD=pass
+
+check_log sasl-login-colon 2 'RELAY_LOGIN must not contain a colon' \
+  RELAY_HOST=smtp.example.com \
+  RELAY_LOGIN=us:er \
+  RELAY_PASSWORD=pass
+
 check_fail recipients-whitespace 2 \
   RELAY_HOST=smtp.example.com \
   "RECIPIENT_RESTRICTIONS=   "
