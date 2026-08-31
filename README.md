@@ -7,6 +7,7 @@
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/cplieger/docker-smtp-relay/badge)](https://scorecard.dev/viewer/?uri=github.com/cplieger/docker-smtp-relay)
 [![SBOM](https://img.shields.io/badge/SBOM-SPDX-1D4ED8)](https://github.com/cplieger/docker-smtp-relay/releases)
 
+<!-- hub-overview BEGIN -->
 Point all your services at one container for outbound email; no per-app SMTP setup needed.
 
 ## What it does
@@ -26,6 +27,7 @@ Accepts email from services on your local network and forwards it through a real
 - **Relay-only, not a full MTA.** No local delivery, no mailbox management, no inbound routing. Does one thing well: accept mail and forward it upstream.
 - **Strict input validation.** Every env var is validated before Postfix starts, so a bad value fails the container at boot instead of producing a misconfigured relay. See [Security](#security) for the specific checks.
 - **Postfix as PID 1.** Runs in foreground mode for proper signal handling; if it crashes, the container exits and Docker's restart policy recovers it cleanly.
+<!-- hub-overview END -->
 
 ## Quick start
 
