@@ -4,37 +4,27 @@
 # in entries must not expand to files in the CWD.
 set -euf
 
-# ---------------------------------------------------------------------------
-# Modes
-# ---------------------------------------------------------------------------
-# run    (default) Validate env, render config, configure SASL, probe the
-#                  upstream relay, then exec Postfix in the foreground as PID 1.
-# render           Validate env and render the Postfix config files only — no
-#                  secrets written, no postmap/postfix invoked, no root needed.
-#                  Used by the golden-file tests (tests/render-test.sh) to
-#                  exercise config generation in isolation.
+# Modes:
+#   run    (default) Validate env, render config, configure SASL, probe the
+#          upstream relay, then exec Postfix in the foreground as PID 1.
+#   render Validate env and render the Postfix config files only — no
+#          secrets written, no postmap/postfix invoked, no root needed.
+#          Drives the golden-file tests (tests/render-test.sh).
 MODE="${1:-run}"
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-# CONF_DIR is the directory the generated Postfix files are written to. It
-# defaults to the real Postfix config dir; the test harness overrides it to a
-# temp dir so config generation runs without root or a Postfix install. Only
-# the three generated files are scoped to it — CA bundle, TLS scache, and the
-# stdout maillog path are left at their absolute locations.
+# CONF_DIR: where generated Postfix files land. Defaults to the real Postfix
+# config dir; the test harness overrides it to a temp dir so config
+# generation runs without root or a Postfix install. Only the three
+# generated files are scoped to it.
 : "${CONF_DIR:=/etc/postfix}"
 readonly CONF_DIR
 readonly SASL_PASSWD_FILE="${CONF_DIR}/sasl_passwd"
 readonly MAIN_CF="${CONF_DIR}/main.cf"
 
-# ---------------------------------------------------------------------------
-# Exit codes: 2 = config-validation failure, 1 = runtime failure
-# ---------------------------------------------------------------------------
+# Exit codes: 2 = config-validation failure, 1 = runtime failure.
 
-# ---------------------------------------------------------------------------
-# Config contract
-# ---------------------------------------------------------------------------
+# Config contract (see docker-smtp-relay steering doc for the full env-var
+# reference; this table is the validator's own spec):
 # Env Var                          Type      Default              Constraints
 # -------                          ----      -------              -----------
 # ACCEPTED_NETWORKS                string    192.168.0.0/16 ...   space-separated CIDRs; min /8; no 0.0.0.0/0 or ::/0
@@ -54,24 +44,18 @@ readonly MAIN_CF="${CONF_DIR}/main.cf"
 # SMTP_HOSTNAME                    string    smtp-relay.local     FQDN recommended (shape not enforced); no newlines/metacharacters
 # STARTUP_PROBE                    enum      true                 true|false; fail-soft upstream TCP check
 # STARTUP_PROBE_TIMEOUT            integer   5                    1-10; seconds (kept under healthcheck start-period)
-# ---------------------------------------------------------------------------
 
-# ---------------------------------------------------------------------------
-# Source validation and recipient-filter helpers
-# ---------------------------------------------------------------------------
 # shellcheck source-path=SCRIPTDIR source=validate.sh
 . "$(dirname "$0")/validate.sh"
 # shellcheck source-path=SCRIPTDIR source=recipient-filter.sh
 . "$(dirname "$0")/recipient-filter.sh"
 
-# ---------------------------------------------------------------------------
-# apply_defaults — populate unset env vars with their documented defaults.
-# ---------------------------------------------------------------------------
+# Populates unset env vars with their documented defaults.
 apply_defaults() {
   # Distinguish unset from explicitly empty: an unset ACCEPTED_NETWORKS gets
-  # the RFC1918 default, but an explicitly empty value is left as-is so the
-  # empty-value guard in validate_config can reject it (exit 2) rather than
-  # silently broadening relay acceptance to the default private ranges.
+  # the RFC1918 default, but an explicitly empty value is left as-is so
+  # validate_config rejects it (exit 2) rather than silently broadening
+  # relay acceptance to the default private ranges.
   if [ "${ACCEPTED_NETWORKS+x}" != x ]; then
     ACCEPTED_NETWORKS="192.168.0.0/16 172.16.0.0/12 10.0.0.0/8"
   fi
@@ -80,22 +64,16 @@ apply_defaults() {
   : "${RELAY_LOGIN:=}"
   : "${RELAY_PASSWORD:=}"
   : "${RECIPIENT_RESTRICTIONS:=}"
-  # Default to `secure` (chain + hostname verification) so a deploy without the
-  # compose override does not silently fall back to cert-blind TLS.
+  # Default to `secure` (chain + hostname verification) so a deploy without
+  # the compose override does not silently fall back to cert-blind TLS.
   : "${SMTP_TLS_SECURITY_LEVEL:=secure}"
   : "${SMTP_TLS_FINGERPRINT_CERT_MATCH:=}"
-  # Distinguish unset from operator-SET for the digest: the sha256 default
+  # Distinguish unset from operator-set for the digest: the sha256 default
   # must not trip the fingerprint-family both-or-neither check at
-  # non-fingerprint levels, but an operator-set digest (even the default
-  # spelling) at another level is a misconfiguration surprise
-  # validate_fingerprint_config rejects. A blank value is treated as unset,
-  # not as set: it is the shape a templated env var takes when its
-  # substitution is empty, it is never a valid digest (the sha256/sha512
-  # allowlist rejects it), and every other optional var here treats blank
-  # as unset. Refusing to boot on it would crash-loop a container whose
-  # config asks for no pinning at all. (ACCEPTED_NETWORKS keeps its +x
-  # probe because an empty network list is a real, deny-everything config
-  # with its own error.)
+  # non-fingerprint levels, but an operator-set digest at another level is a
+  # misconfiguration validate_fingerprint_config rejects. A blank value
+  # counts as unset (never a valid digest; every other optional var here
+  # treats blank the same way).
   if [ -n "${SMTP_TLS_FINGERPRINT_DIGEST:-}" ]; then
     FINGERPRINT_DIGEST_EXPLICIT=true
   else
@@ -103,39 +81,29 @@ apply_defaults() {
     SMTP_TLS_FINGERPRINT_DIGEST=sha256
   fi
   # Inbound STARTTLS is opt-in: all three default empty, so port 25 keeps
-  # speaking cleartext SMTP unless the operator mounts a cert/key pair. The
-  # level's effective default (may, when the pair is set) is resolved in
-  # compute_smtpd_tls_lines, not here: an empty level with no pair must stay
-  # indistinguishable from unset (both mean "inbound TLS off").
+  # speaking cleartext SMTP unless the operator mounts a cert/key pair.
   : "${SMTPD_TLS_CERT_FILE:=}"
   : "${SMTPD_TLS_KEY_FILE:=}"
   : "${SMTPD_TLS_SECURITY_LEVEL:=}"
   : "${MESSAGE_SIZE_LIMIT:=10240000}"
-  # Use an FQDN-shaped default so Postfix does not emit `numeric hostname`
-  # warnings and receiving MTAs that validate HELO accept the relay. Postfix's
-  # identity comes solely from this env var (rendered as myhostname); the
+  # An FQDN-shaped default avoids Postfix's `numeric hostname` warning; this
+  # is Postfix's only identity source (rendered as myhostname) — the
   # container hostname is never read.
   : "${SMTP_HOSTNAME:=smtp-relay.local}"
   : "${STARTUP_PROBE:=true}"
   : "${STARTUP_PROBE_TIMEOUT:=5}"
 }
 
-# ---------------------------------------------------------------------------
-# validate_config — run every input check, exit 2 on the first failure.
-# Split into one helper per validation concern; validate_config (defined
-# after the helpers) orchestrates them in the original check order, so exit-2
-# precedence is unchanged. Two blocks deliberately live outside their tidiest
-# home to preserve that order: the RELAY_HOST required check ends
-# validate_declared_fields (it must fire before the SASL both-or-neither
-# check), and the cleartext-TLS guard ends validate_relay_acceptance (it must
-# fire after the ACCEPTED_NETWORKS checks).
-# ---------------------------------------------------------------------------
+# validate_config runs every input check, exit 2 on the first failure. Split
+# into one helper per concern in the original check order (exit-2 precedence
+# is load-bearing): the RELAY_HOST required check ends
+# validate_declared_fields (must fire before the SASL both-or-neither check),
+# and the cleartext-TLS guard ends validate_relay_acceptance (must fire
+# after the ACCEPTED_NETWORKS checks).
 
-# validate_field_check VAR VALUE CHECK — run one spec-table check. An unknown
-# check token is a spec-table typo: fail loudly (the caller exits 2), matching
-# the unknown-var guard in validate_declared_fields, instead of silently
-# skipping the intended validation. The token comes from the hardcoded
-# _spec_table, never from user input, so interpolating it is safe.
+# validate_field_check VAR VALUE CHECK — runs one spec-table check. An
+# unknown token is a spec-table typo: fail loudly rather than silently
+# skipping that field's validation.
 validate_field_check() {
   case "$3" in
     nl) validate_no_newlines "$1" "$2" ;;
@@ -183,31 +151,25 @@ STARTUP_PROBE_TIMEOUT:nl,num,range=1:10
   for _spec in $_spec_table; do
     _var="${_spec%%:*}"
     _checks="${_spec#*:}"
-    # A spec row names its env var exactly once; the value is fetched
-    # indirectly so the name lives in one place ($_spec_table) instead of
-    # being duplicated in a per-var case. apply_defaults sets every var in
-    # the table, so an unset name here is a spec-table typo — surface it the
-    # way the old `*)` arm did (exit 2) rather than letting `set -u` abort
-    # with a vaguer message. `${var+x}` is unset-safe (yields empty, never
-    # trips `set -u`); the eval is needed only for the indirect name.
+    # apply_defaults sets every var in the table, so an unset name here is a
+    # spec-table typo — surface it (exit 2) rather than let `set -u` abort
+    # with a vaguer message. `${var+x}` is unset-safe.
     if ! eval "[ \"\${${_var}+x}\" = x ]"; then
       printf 'level=error msg="unknown validation var" var=%s\n' "$_var" >&2
       exit 2
     fi
-    # eval is confined to this bare parameter expansion; $_value is then run
-    # through the same newline/metacharacter checks as before, so no
-    # unsanitized value ever reaches a command. The empty seed makes the
-    # indirect assignment visible to ShellCheck (SC2154).
+    # eval is confined to this bare parameter expansion; $_value then runs
+    # through the same checks as every other value, so nothing unsanitized
+    # reaches a command.
     _value=''
     eval "_value=\${$_var}"
     _oldIFS=$IFS
     IFS=,
-    # The for-list is split ONCE with IFS=, (comma-separated check tokens), so
-    # restoring IFS inside the body is safe — and load-bearing: the rcptrules /
-    # rcptbytes validators field-split their value with `set -- $2` and need the
-    # default IFS. With IFS still "," a space-separated RECIPIENT_RESTRICTIONS
-    # counts as ONE token and the 256-rule cap never fires (300 rules render and
-    # boot). The reset after the loop is the empty-$_checks case, not a duplicate.
+    # The for-list is split ONCE with IFS=, so restoring IFS inside the body
+    # is load-bearing: rcptrules/rcptbytes field-split their value with
+    # `set -- $2` and need the default IFS, or a space-separated
+    # RECIPIENT_RESTRICTIONS counts as one token and the 256-rule cap never
+    # fires.
     for _chk in $_checks; do
       IFS=$_oldIFS
       validate_field_check "$_var" "$_value" "$_chk" || exit 2
@@ -220,8 +182,7 @@ STARTUP_PROBE_TIMEOUT:nl,num,range=1:10
   validate_sasl_password "$RELAY_PASSWORD" || exit 2
   validate_tls_level "$SMTP_TLS_SECURITY_LEVEL" || exit 2
 
-  # Required variables (kept here, before the SASL pairing check, so the
-  # exit-2 precedence between the two errors is unchanged)
+  # Kept here, before the SASL pairing check, so exit-2 precedence is unchanged.
   if [ -z "$RELAY_HOST" ]; then
     printf 'level=error msg="RELAY_HOST must be set"\n' >&2
     exit 2
@@ -229,7 +190,7 @@ STARTUP_PROBE_TIMEOUT:nl,num,range=1:10
   validate_relay_host_shape "$RELAY_HOST" || exit 2
 }
 
-# validate_sasl_config — SASL credentials are both-or-neither.
+# SASL credentials are both-or-neither.
 validate_sasl_config() {
   if [ -z "$RELAY_LOGIN" ] && [ -z "$RELAY_PASSWORD" ]; then
     printf 'level=info msg="SASL auth disabled; RELAY_LOGIN/RELAY_PASSWORD not set"\n' >&2
@@ -240,24 +201,17 @@ validate_sasl_config() {
 }
 
 # validate_fingerprint_config — the fingerprint-family vars are both-or-
-# neither with SMTP_TLS_SECURITY_LEVEL=fingerprint, mirroring the
-# RELAY_LOGIN/RELAY_PASSWORD contract (Tier 2, explicit user decision):
-#   - level=fingerprint without a cert match can never verify any peer
-#     (every delivery defers with maillog-only diagnostics), so it is
-#     rejected at boot instead of rendering a dead relay.
-#   - a cert match (or an explicitly set digest) at any other level is
-#     silently ignored by Postfix — a configured trust anchor that does
-#     nothing is a misconfiguration surprise, so it is equally fatal.
-# Token format and the sha256/sha512 digest allowlist are enforced by
-# validate_fingerprint_match / validate_fingerprint_digest (validate.sh).
+# neither with SMTP_TLS_SECURITY_LEVEL=fingerprint: level=fingerprint
+# without a cert match can never verify any peer (every delivery defers), so
+# it is rejected at boot; a cert match or explicit digest at any other level
+# is silently ignored by Postfix, equally fatal. Token format and the
+# sha256/sha512 allowlist are enforced by validate_fingerprint_match /
+# validate_fingerprint_digest.
 validate_fingerprint_config() {
   if [ "$SMTP_TLS_SECURITY_LEVEL" = fingerprint ]; then
-    # "Set" means at least one token: a whitespace-only value bypasses a
-    # plain -z test but word-splits to zero tokens, so
-    # validate_fingerprint_match iterates nothing and the render emits an
-    # empty smtp_tls_fingerprint_cert_match -- no peer can ever verify and
-    # every delivery defers (verified live). Same zero-token rejection the
-    # ACCEPTED_NETWORKS and RECIPIENT_RESTRICTIONS guards apply.
+    # A whitespace-only value bypasses -z but word-splits to zero tokens, so
+    # the render emits an empty smtp_tls_fingerprint_cert_match and no peer
+    # can ever verify.
     case "$SMTP_TLS_FINGERPRINT_CERT_MATCH" in
       '')
         printf 'level=error msg="SMTP_TLS_SECURITY_LEVEL=fingerprint requires SMTP_TLS_FINGERPRINT_CERT_MATCH; without a match no peer can ever verify and every delivery defers"\n' >&2
@@ -286,25 +240,15 @@ validate_fingerprint_config() {
 }
 
 # validate_smtpd_tls_config — the inbound (smtpd) TLS vars are both-or-
-# neither, mirroring the RELAY_LOGIN/RELAY_PASSWORD contract (Tier 2,
-# explicit user decision):
-#   - half a cert/key pair can never negotiate STARTTLS (Postfix needs
-#     both), so it is rejected at boot instead of rendering a dead or
-#     surprising inbound surface.
-#   - SMTPD_TLS_SECURITY_LEVEL without the pair renders no smtpd_tls_*
-#     lines at all — a trust config that silently does nothing is a
-#     misconfiguration surprise, so it is equally fatal (same rationale as
-#     SMTP_TLS_FINGERPRINT_DIGEST at a non-fingerprint level).
-#   - the level is allowlisted to may|encrypt: `none` is expressed by
-#     leaving the pair unset, and the certless outbound-style levels
-#     (secure, verify, ...) are meaningless for a server-side listener.
-# The filesystem contract (the pair must exist as readable files) is
-# run-mode-only and lives in validate_smtpd_tls_files.
+# neither: half a cert/key pair can never negotiate STARTTLS; a level
+# without the pair renders no smtpd_tls_* lines at all, equally fatal
+# (mirrors SMTP_TLS_FINGERPRINT_DIGEST at a non-fingerprint level). The
+# level is allowlisted to may|encrypt — `none` is expressed by leaving the
+# pair unset. The filesystem contract (the pair must exist as readable
+# files) is run-mode-only, in validate_smtpd_tls_files.
 validate_smtpd_tls_config() {
   if [ -z "$SMTPD_TLS_CERT_FILE" ] && [ -z "$SMTPD_TLS_KEY_FILE" ]; then
     if [ -n "$SMTPD_TLS_SECURITY_LEVEL" ]; then
-      # Do not interpolate the level: it is unvalidated at this point (the
-      # allowlist below only runs when the pair is set).
       printf 'level=error msg="SMTPD_TLS_SECURITY_LEVEL is set but SMTPD_TLS_CERT_FILE/SMTPD_TLS_KEY_FILE are not; without the cert/key pair no inbound TLS is rendered, and a trust config that silently does nothing is a misconfiguration"\n' >&2
       exit 2
     fi
@@ -318,26 +262,21 @@ validate_smtpd_tls_config() {
   case "${SMTPD_TLS_SECURITY_LEVEL:-may}" in
     may | encrypt) ;;
     *)
-      # The rejected value is unvalidated input; do not interpolate it
-      # (logfmt quoting) — the allowlist is enough context to fix the config.
       printf 'level=error msg="invalid inbound TLS security level (cleartext is expressed by leaving the cert/key pair unset, not by a level value)" var=SMTPD_TLS_SECURITY_LEVEL valid="may encrypt"\n' >&2
       exit 2
       ;;
   esac
 }
 
-# validate_relay_acceptance — relay-acceptance policy: who we accept mail
-# from, and that credentials never travel a cleartext upstream channel.
+# validate_relay_acceptance — who we accept mail from, and that credentials
+# never travel a cleartext upstream channel.
 validate_relay_acceptance() {
-  # ACCEPTED_NETWORKS: reject open-relay and overly broad configs. One case
-  # covers both degenerate shapes: explicitly empty, and non-empty but
-  # whitespace-only. The whitespace-only value parses to zero entries:
-  # validate_no_open_relay iterates nothing and succeeds, and the rendered
-  # mynetworks contains only 127.0.0.0/8 and [::1]/128 -- silently excluding
-  # every intended LAN while validation and the healthcheck stay green.
-  # Fatal, mirroring the RECIPIENT_RESTRICTIONS zero-token rejection. (An
-  # UNSET ACCEPTED_NETWORKS never reaches here: apply_defaults gives it the
-  # RFC 1918 default.)
+  # A whitespace-only ACCEPTED_NETWORKS parses to zero entries: the loop
+  # below succeeds and the rendered mynetworks contains only loopback,
+  # silently excluding every intended LAN while validation stays green.
+  # Fatal, mirroring RECIPIENT_RESTRICTIONS' zero-token rejection. (An
+  # UNSET ACCEPTED_NETWORKS never reaches here — apply_defaults gives it
+  # the RFC 1918 default.)
   case "$ACCEPTED_NETWORKS" in
     '')
       printf 'level=error msg="ACCEPTED_NETWORKS is empty"\n' >&2
@@ -352,20 +291,18 @@ validate_relay_acceptance() {
   validate_no_open_relay "$ACCEPTED_NETWORKS" || exit 2
 
   # Reject cleartext TLS when SASL credentials are configured — sending
-  # passwords over an unencrypted channel is a credential leak. (Kept here,
-  # after the ACCEPTED_NETWORKS checks, so exit-2 precedence is unchanged.)
+  # passwords over an unencrypted channel is a credential leak.
   if sasl_enabled && tls_level_cleartext; then
     printf 'level=error msg="TLS must be encrypt or stronger when SASL credentials are set" tls_level=%s\n' \
       "$SMTP_TLS_SECURITY_LEVEL" >&2
     exit 2
   fi
   # encrypt secures the channel but never authenticates the peer, and dane
-  # degrades to unauthenticated opportunistic TLS when the upstream has no
-  # usable TLSA records (the normal case for hosted providers): an active
-  # on-path attacker can terminate the TLS session and harvest the SASL
-  # credentials. Warn only (README documents both levels as supported); the
-  # noplaintext SASL option already blocks credentials on a fully cleartext
-  # channel, so the residual exposure is attacker-terminated TLS.
+  # degrades to unauthenticated opportunistic TLS with no usable TLSA
+  # records (the normal case for hosted providers): an on-path attacker can
+  # terminate the session and harvest credentials. Warn only — README
+  # documents both levels as supported, and noplaintext already blocks
+  # credentials on a fully cleartext channel.
   if sasl_enabled; then
     case "$SMTP_TLS_SECURITY_LEVEL" in
       encrypt | dane)
@@ -375,13 +312,9 @@ validate_relay_acceptance() {
     esac
   fi
 
-  # RELAY_PORT=465 is the documented implicit-TLS port (the render turns on
-  # smtp_tls_wrappermode, see compute_tls_wrappermode), so the level must be
-  # mandatory; tls_level_wrapper_incompatible documents the postconf(5)
-  # rationale for why none/may/dane can never satisfy implicit TLS. Such a
-  # config could never have delivered mail, so reject it instead of rendering
-  # a dead relay. (Numeric -eq: RELAY_PORT is already validated numeric and
-  # in range, and -eq also matches a leading-zero spelling.)
+  # RELAY_PORT=465 is implicit TLS (compute_tls_wrappermode turns on
+  # smtp_tls_wrappermode), so the level must be mandatory; such a config
+  # could never have delivered mail.
   if [ "$RELAY_PORT" -eq 465 ] && tls_level_wrapper_incompatible; then
     printf 'level=error msg="RELAY_PORT=465 is implicit TLS; SMTP_TLS_SECURITY_LEVEL must be mandatory (encrypt or stronger; dane is opportunistic and degrades to may without TLSA records)" tls_level=%s\n' \
       "$SMTP_TLS_SECURITY_LEVEL" >&2
@@ -389,14 +322,11 @@ validate_relay_acceptance() {
   fi
 }
 
-# validate_smtpd_tls_files — the inbound TLS cert/key filesystem contract, run
-# mode only: render mode must stay side-effect-free and runnable without the
-# operator's mounted files (the golden tests exercise paths that exist only in
-# the deployed container), so the existence check applies where Postfix will
-# actually read the files. Same structured-error rationale as CONF_DIR: a
-# missing mount would otherwise surface only as a maillog TLS-engine error
-# after "input validation passed" was logged. The env-level both-or-neither
-# contract is validate_smtpd_tls_config's.
+# validate_smtpd_tls_files — the inbound TLS cert/key filesystem contract,
+# run mode only: render mode must stay side-effect-free and runnable without
+# the operator's mounted files. A missing mount would otherwise surface
+# only as a maillog TLS-engine error after "input validation passed" was
+# logged.
 validate_smtpd_tls_files() {
   if [ "$MODE" != run ] || [ -z "$SMTPD_TLS_CERT_FILE" ]; then
     return 0
@@ -407,19 +337,12 @@ validate_smtpd_tls_files() {
       exit 2
     fi
   done
-  # PEM-shape hints are warn-only (see the Tier 3 note in validate.sh): a
-  # swapped cert/key pair — the classic operator
-  # mistake when both env vars are set together — or a non-PEM file
-  # passes the readable-file loop above, the startup line logs
-  # smtpd_tls=may|encrypt as if TLS were live, and every STARTTLS
-  # handshake then fails with maillog-only TLS-engine errors while the
-  # TCP-220 healthcheck stays green (the banner is pre-TLS). A cheap grep
-  # surfaces the swap at deploy time. The key marker matches every PEM
-  # private-key variant (RSA/EC/PKCS8 all end in "PRIVATE KEY"); a
-  # combined cert+key PEM mounted in both slots (which Postfix allows)
-  # carries both markers and passes both greps by design. No exit-code
-  # change: both checks are heuristics an exotic-but-working layout
-  # could trip.
+  # PEM-shape hints are warn-only: a swapped cert/key pair passes the
+  # readable-file loop above, and every STARTTLS handshake then fails with
+  # maillog-only errors while the TCP-220 healthcheck stays green (the
+  # banner is pre-TLS). The key marker matches every PEM private-key
+  # variant; a combined cert+key PEM carries both markers and passes both
+  # greps by design.
   if ! grep -q 'BEGIN CERTIFICATE' -- "$SMTPD_TLS_CERT_FILE" 2>/dev/null; then
     printf 'level=warn msg="inbound TLS cert file does not contain a PEM CERTIFICATE block (cert and key swapped, or not PEM?)" path="%s"\n' \
       "$(sanitize_token "$SMTPD_TLS_CERT_FILE")" >&2
@@ -428,10 +351,8 @@ validate_smtpd_tls_files() {
     printf 'level=warn msg="inbound TLS key file does not contain a PEM PRIVATE KEY block (cert and key swapped, or not PEM?)" path="%s"\n' \
       "$(sanitize_token "$SMTPD_TLS_KEY_FILE")" >&2
   fi
-  # The key is a private credential: flag a group- or world-readable mode
-  # (read bit in either of the last two octal digits), but keep it a
-  # warning — the operator may have deliberate group-read semantics on
-  # the mount (e.g. a cert-renewal sidecar's shared group).
+  # A group- or world-readable key stays a warning: the operator may have
+  # deliberate group-read semantics (e.g. a cert-renewal sidecar's group).
   if ! _key_mode=$(stat -c %a -- "$SMTPD_TLS_KEY_FILE" 2>/dev/null); then
     _key_mode=''
     printf 'level=warn msg="could not read inbound TLS key file mode; the group/world-readable check was skipped" path="%s"\n' \
@@ -445,26 +366,20 @@ validate_smtpd_tls_files() {
   esac
 }
 
-# validate_runtime_config — runtime toggles and the filesystem contract.
+# Runtime toggles and the filesystem contract.
 validate_runtime_config() {
-  # STARTUP_PROBE is a plain boolean toggle; anything other than true/false is
-  # a config typo worth surfacing rather than silently treating as disabled.
   case "$STARTUP_PROBE" in
     true | false) ;;
     *)
-      # Do not interpolate the rejected raw value (it can carry a double
-      # quote and break logfmt parsing); the var name + allowlist suffice.
       printf 'level=error msg="STARTUP_PROBE must be true or false" var=STARTUP_PROBE valid="true false"\n' >&2
       exit 2
       ;;
   esac
 
-  # CONF_DIR is where every generated file lands. A syntactically valid but
-  # missing or unwritable directory is a config-contract failure: catch it
-  # here with a structured error and exit 2, instead of letting a later
-  # redirection fail under set -e with only a raw shell diagnostic after
-  # "input validation passed" was already logged (which misclassifies the
-  # bad config as a runtime failure and blinds level=error-based alerts).
+  # A syntactically valid but missing or unwritable CONF_DIR is a
+  # config-contract failure: catch it here with a structured error instead
+  # of a later redirection failing under set -e with only a raw shell
+  # diagnostic after "input validation passed" was already logged.
   if [ ! -d "$CONF_DIR" ] || [ ! -w "$CONF_DIR" ]; then
     printf 'level=error msg="CONF_DIR must be an existing writable directory" conf_dir="%s"\n' "$(sanitize_token "$CONF_DIR")" >&2
     exit 2
@@ -709,11 +624,9 @@ compatibility_level = 3.6
 
 myhostname = ${SMTP_HOSTNAME}
 mydestination = localhost
-# Relay-only image: local(8) delivery is disabled (Postfix
-# STANDARD_CONFIGURATION_README gateway recipe), so no SMTP client can ever
-# cause a write into a container mailbox. localhost stays in mydestination so
-# an unknown localhost recipient is still rejected at RCPT and a stray one is
-# never silently forwarded upstream instead.
+# local(8) delivery is disabled (local_transport below); localhost stays in
+# mydestination so an unknown localhost recipient is still rejected at RCPT
+# rather than silently forwarded upstream.
 local_transport = error: local mail delivery is disabled
 mynetworks = ${MYNETWORKS_VALUE}
 inet_interfaces = all
@@ -736,11 +649,9 @@ smtp_tls_mandatory_ciphers = high
 smtp_tls_ciphers = high${SMTPD_TLS_LINES}
 
 message_size_limit = ${MESSAGE_SIZE_LIMIT}
-# Postfix requires mailbox_size_limit >= message_size_limit. With the Postfix
-# default (51200000) a larger MESSAGE_SIZE_LIMIT makes the local(8) delivery
-# agent fatal on mail addressed to \$mydestination (verified by live repro);
-# relayed mail is unaffected. Track the message limit so the whole validated
-# 1-100 MB range works on every delivery path.
+# mailbox_size_limit must be >= message_size_limit or Postfix's default
+# (51200000) makes local(8) fatal on mail to \$mydestination once
+# MESSAGE_SIZE_LIMIT exceeds it (relayed mail is unaffected).
 mailbox_size_limit = ${MESSAGE_SIZE_LIMIT}
 
 smtpd_relay_restrictions = permit_mynetworks, reject
@@ -974,26 +885,15 @@ write_sasl_secret() {
   # Belt-and-suspenders: tighten the regenerated map to 0600 regardless of
   # the database suffix Postfix chose (ignore a missing suffix).
   chmod 600 "${SASL_PASSWD_FILE}.db" "${SASL_PASSWD_FILE}.lmdb" 2>/dev/null || true
-  # Remove plaintext credentials; Postfix only reads the indexed map
-  # (.lmdb in this image: compute_sasl_state renders an lmdb: map because
-  # -DNO_DB compiles Berkeley DB out). A failed
-  # cleanup leaves the plaintext on disk: the wrapper logs a structured error
-  # and startup refuses to continue instead of a raw set -e death.
-  # Drop the EXIT cleanup trap BEFORE the explicit removal so a failure here
-  # is reported exactly once: with the trap still armed, `exit 1` re-entered
-  # cleanup_sasl_plaintext_or_log and logged the same
-  # credentials-may-remain-on-disk error a second time, and a retry that
-  # SUCCEEDED emitted no line correcting the first one. abort_sasl_secret is
-  # still armed across this cleanup call, so a signal here still cleans up.
-  # No second attempt is made: cleanup_sasl_plaintext is deterministic against
-  # unchanged state (rm, truncate in place, rm again), so an immediate retry
-  # repeats the same operations against the same directory mode and returns the
-  # same status. The EXIT trap's old second call was an artifact of trap
-  # ordering, not a recovery mechanism -- do not restore it.
+  # Drop the EXIT cleanup trap before the explicit removal so a failure here
+  # is reported exactly once (with the trap still armed, exit 1 re-enters
+  # cleanup_sasl_plaintext_or_log and double-logs). abort_sasl_secret stays
+  # armed, so a signal here still cleans up. No retry: cleanup_sasl_plaintext
+  # is deterministic against unchanged state.
   trap - EXIT
   cleanup_sasl_plaintext_or_log || exit 1
   # Re-arm the startup handler: clearing all traps would leave the rest of
-  # startup (postfix checks, upstream probe) without signal handling as PID 1.
+  # startup without signal handling as PID 1.
   trap startup_abort INT TERM HUP QUIT
 
   printf 'level=info msg="SASL authentication configured"\n' >&2
@@ -1089,23 +989,14 @@ probe_upstream() {
   fi
 }
 
-# ---------------------------------------------------------------------------
-# count_queue — bounded, error-checked count of files in one spool queue
-# directory. Scan through a bounded temp file so find failures cannot be
-# masked by wc or reported as an authoritative zero: an unreadable, corrupt,
-# or disappearing spool must warn rather than present a real 0, and an
-# unbounded find over a pathological volume must not hold startup. Run the
-# find under a short timeout via run_interruptible (a docker stop mid-scan is
-# honored), check the scan status before counting, and report availability
-# instead of presenting a failed scan as a real zero.
-# Usage: count_queue NAME DIR — sets _queue_count and _queue_ok (true|false);
-# emits level=warn when the scan fails.
-# ---------------------------------------------------------------------------
+# count_queue NAME DIR — bounded, error-checked count of files in one spool
+# queue directory. Scans through a bounded temp file so a find failure can't
+# be masked by wc or reported as an authoritative zero; runs under a short
+# timeout via run_interruptible so a docker stop mid-scan is honored. Sets
+# _queue_count and _queue_ok (true|false); emits level=warn when the scan
+# fails.
 # scan_queue_files DIR OUTFILE — the bounded find, wrapped so
-# run_interruptible can background it as a single child. 5s is generous for
-# a healthy spool while keeping startup bounded on a pathological one. exec
-# replaces the wrapper so the recorded PID names the timeout-supervised find
-# (terminate_startup_child TERMs the operation, not an intermediate shell).
+# run_interruptible can background it as a single child.
 scan_queue_files() {
   exec timeout -k 5 "$QUEUE_SCAN_TIMEOUT" find "$1" -type f >"$2" 2>/dev/null
 }
@@ -1157,17 +1048,11 @@ count_queue() {
   fi
 }
 
-# ---------------------------------------------------------------------------
-# log_startup — record persisted queue depth at startup. Helps correlate
-# restart events with pre-existing backlogs in Loki/Grafana alerts (the spool
-# is volume-mounted, so a restart during an upstream outage resumes with
-# deferred mail). Raw find counts are more parseable than postqueue's summary
-# string for Grafana stats() queries. queue_scan_ok=false marks the counts as
-# non-authoritative when either scan failed (details in the paired warn).
-# tls is the outbound (upstream) level; smtpd_tls is the effective inbound
-# level (off unless a cert/key pair is mounted), so the two TLS directions
-# stay distinguishable in one line.
-# ---------------------------------------------------------------------------
+# log_startup — records persisted queue depth at startup, for correlating
+# restarts with pre-existing backlogs in Loki/Grafana. queue_scan_ok=false
+# marks the counts as non-authoritative when either scan failed. tls is the
+# outbound level; smtpd_tls is the effective inbound level (off unless a
+# cert/key pair is mounted).
 log_startup() {
   count_queue active /var/spool/postfix/active
   _queue_active=$_queue_count
@@ -1180,16 +1065,9 @@ log_startup() {
     "$_queue_active" "$_queue_deferred" "$_queue_scan_ok" >&2
 }
 
-# ---------------------------------------------------------------------------
 # startup_abort — terminating-signal handler for the whole pre-exec startup
-# path. As PID 1 the shell ignores SIGTERM/SIGINT with default disposition,
-# so without an explicit handler a `docker stop` during startup (notably
-# probe_upstream, which blocks up to STARTUP_PROBE_TIMEOUT+2 seconds, or
-# postfix set-permissions over a large spool) is silently ignored until
-# Docker escalates to SIGKILL. Blocking startup ops run via run_interruptible
-# so the shell is in an interruptible `wait` when the signal lands; TERM and
-# reap the recorded child, then exit non-zero so the stop is honored.
-# ---------------------------------------------------------------------------
+# path. As PID 1 the shell ignores SIGTERM/SIGINT by default, so without this
+# a docker stop during startup is ignored until Docker escalates to SIGKILL.
 startup_abort() {
   trap - INT TERM HUP QUIT
   terminate_startup_child
@@ -1209,38 +1087,29 @@ case "$MODE" in
     trap startup_abort INT TERM HUP QUIT
     render_config
     # CONF_DIR scopes only where the generated files are written; the Postfix
-    # commands below (newaliases, check, set-permissions, start-fg) read the
-    # compiled-in /etc/postfix. An overridden CONF_DIR in run mode therefore
-    # boots Postfix on the stock unrendered config while startup logs claim
-    # the validated values are live. Warn loudly; the override is a test-
-    # harness knob (see the Constants comment), not a supported run-mode path.
+    # commands below read the compiled-in /etc/postfix regardless, so an
+    # overridden CONF_DIR in run mode boots Postfix on the stock unrendered
+    # config while startup logs claim the validated values are live.
     if [ "$CONF_DIR" != /etc/postfix ]; then
       printf 'level=warn msg="CONF_DIR overridden in run mode; Postfix reads /etc/postfix and will NOT use the rendered config" conf_dir="%s"\n' \
         "$(sanitize_token "$CONF_DIR")" >&2
     fi
     write_sasl_secret
-    # Credentials are persisted in the 0600 indexed map; drop the env copies so
-    # they do not linger in /proc/1/environ for the container's lifetime. This is
-    # a one-way door: sasl_enabled -- and any other RELAY_LOGIN/RELAY_PASSWORD
-    # read -- is unusable past this point, because under set -u an unset variable
-    # aborts PID 1 with a bare "parameter not set" before Postfix ever starts. A
-    # startup step added below must not consult either variable.
+    # Credentials are persisted in the 0600 indexed map; drop the env copies
+    # so they do not linger in /proc/1/environ. One-way door: under set -u,
+    # any startup step added below that reads RELAY_LOGIN/RELAY_PASSWORD
+    # aborts PID 1.
     unset RELAY_PASSWORD RELAY_LOGIN
     run_postfix_checks
     probe_upstream
     log_startup
-    # The startup trap deliberately stays armed through exec: clearing it
-    # here would open a TERM-loss window between the reset and exec, and
-    # exec itself resets caught signal dispositions to default for Postfix.
+    # The startup trap stays armed through exec: clearing it here would open
+    # a TERM-loss window, and exec itself resets signal dispositions for Postfix.
     exec postfix start-fg
     ;;
   *)
-    # MODE is a raw CLI argument that bypasses env validation (it may even
-    # contain a newline), and unlike every other rejection site there is no
-    # var name to log in its place -- the value is the only context an
-    # operator has. Route it through sanitize_token, which strips the logfmt
-    # delimiters and control bytes and caps the length, so the line stays a
-    # single parseable record. mode_invalid=true is kept for existing consumers.
+    # MODE bypasses env validation and may contain a newline, so route it
+    # through sanitize_token to keep the log line a single parseable record.
     printf 'level=error msg="unknown mode" mode_invalid=true mode="%s" valid="run render"\n' \
       "$(sanitize_token "$MODE")" >&2
     exit 2
