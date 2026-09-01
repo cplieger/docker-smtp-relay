@@ -1,3 +1,9 @@
+# Synced from cplieger/ci/.github/workflow-templates/security.yml — DO NOT EDIT.
+# Dependency and vulnerability review on Go dependency changes.
+#
+# This template predates the sync-header convention (2026-06-02) and was one of
+# two that never got one backfilled, so nothing warned an editor that the next
+# chore(sync) would clobber a local change. Edit it HERE.
 name: Security
 
 on:
@@ -22,4 +28,4 @@ jobs:
     permissions:
       contents: read
       security-events: write
-    uses: cplieger/ci/.github/workflows/security-scan.yaml@a2b9def293e3e8a75c27fda253c84aa5c4527881 # v2
+    uses: cplieger/ci/.github/workflows/security-scan.yaml@5ba93f366541ece117eaed5d1490e0d4c4bc5fd0 # v2
