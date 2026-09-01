@@ -1,13 +1,9 @@
 #!/bin/sh
-# ---------------------------------------------------------------------------
-# validate.sh — input-validation helpers for smtp-relay entrypoint.
-# Sourced at runtime by entrypoint.sh. Canonical copy; there is no shared
-# validation library.
-# ---------------------------------------------------------------------------
+# Input-validation helpers for smtp-relay entrypoint.sh, sourced at runtime.
+# Canonical copy; there is no shared validation library.
 
-# printf '%s' + trailing-newline strip lets a single trailing newline pass
-# (harmless; env files and `$(...)` pipelines often preserve one), while
-# still rejecting embedded newlines (the actual config-injection vector).
+# Strips one trailing newline (env files and `$(...)` often carry one) before
+# checking for embedded newlines, the actual config-injection vector.
 validate_no_newlines() {
   _val=$(
     printf '%s' "$2"
@@ -23,89 +19,44 @@ validate_no_newlines() {
   fi
 }
 
-# Rejection logs must not interpolate the raw rejected token: an arbitrary
-# value can carry a double quote (STARTUP_PROBE='bad"value' renders malformed
-# logfmt that can make Alloy's parsing stage drop the fields precisely when
-# startup fails). Log bounded context (var=NAME, valid="...") instead.
-# Where the token itself must stay diagnosable (per-entry network validators:
-# a multi-entry list needs to identify WHICH entry failed), route it through
-# sanitize_token and emit it as a quoted logfmt field.
+# Rejection logs never interpolate the raw rejected token (a value can carry
+# a double quote and break logfmt parsing) except through sanitize_token,
+# which bounds and escapes it for per-entry diagnosability.
 #
-# Validation policy -- which inputs are fatal, and which are the operator's:
-#   Tier 1 (always fatal, security): injection into rendered config (the
-#     newline/metacharacter checks), open-relay CIDR rejection, credential
-#     exposure (SASL field format; cleartext TLS with SASL), and any input
-#     that silently turns a configured restriction into allow-all. That
-#     last class is an explicit closed-set grant covering the empty /
-#     slash-leading recipient regex class, including the dual form's empty
-#     pattern halves, and the universal-match regexp class: any recipient
-#     construct the two-impossible-probe guard in recipient-filter.sh flags
-#     as possibly allow-all. That guard applies to the FULL construct —
-#     single form iff P matches a probe, dual form iff P1 matches AND NOT
-#     P2 — with per-half flag-mirrored probes, and its fatal message states
-#     the honest possibly-allow-all heuristic plus the split / leave-empty
-#     remediations instead of claiming a proof.
+# Validation policy — which inputs are fatal, and which are the operator's:
+#   Tier 1 (always fatal, security): injection into rendered config, the
+#     open-relay CIDR rejection, credential exposure (SASL field format;
+#     cleartext TLS with SASL), and any input that silently turns a
+#     configured restriction into allow-all (the empty/slash-leading
+#     recipient regex class and the universal-match guard in
+#     recipient-filter.sh). Closed set; new entries require the same.
 #   Tier 2 (fatal, documented contract): value combinations the app's own
-#     documented contract says can never function -- the implicit-TLS 465
-#     mandatory-level gate, the never-matching-shape escalations
-#     (whitespace-only / leading-zero / multi-slash network entries,
-#     leading-bracket RELAY_HOST defects), and the fingerprint-family
-#     checks (both-or-neither with level=fingerprint; per-token
-#     colon-separated-hex-pairs format with digest-matching pair count;
-#     sha256/sha512 digest allowlist), and the RECIPIENT_RESTRICTIONS size
-#     bounds (max rules, max bytes: rendering costs external processes per
-#     rule before Postfix binds port 25, so the count and the length are
-#     capped at a conservative fixed budget an order of magnitude inside
-#     the healthcheck start-period, NOT at the measured point where a boot
-#     actually misses it; hard-coded and deliberately not tunable, because
-#     this image renders smtpd_recipient_restrictions itself and exposes
-#     no access-map or policy-service setting, so a larger allowlist needs
-#     a Postfix deployment of its own). This set is CLOSED: each entry is
-#     an explicit user decision; new entries require the same.
+#     contract says can never function — the implicit-TLS 465
+#     mandatory-level gate, never-matching-shape escalations
+#     (whitespace-only/leading-zero/multi-slash network entries,
+#     leading-bracket RELAY_HOST defects), the fingerprint-family
+#     both-or-neither and format checks, and the RECIPIENT_RESTRICTIONS
+#     size bounds (rendering spawns external processes per rule before
+#     Postfix binds port 25; hard-coded, no override — this image exposes
+#     no access-map/policy-service setting for a larger allowlist).
 #   Tier 3 (operator's responsibility): syntactically-plausible but
-#     semantically-wrong values beyond those tiers (typo'd hostnames,
-#     host:port confusion, exotic never-matching shapes). The validator does
-#     NOT chase these per-shape: the existing warn arms (all shape
-#     heuristics; every $TLS_LEVELS entry is fully supported, so no
-#     level-specific warn arms remain) are final, no new shape arms get
-#     added without a Tier 1/2 justification, and Postfix's own runtime
-#     diagnostics are the source of truth for them. Warn-only by explicit
-#     user decision, on top of that baseline: the inbound TLS PEM-shape
-#     hints (entrypoint.sh); and, in recipient-filter.sh, the two
-#     deterministic never-match domain shapes plus the three never-match
-#     address shapes (empty local part, empty domain, dot-after-@) — each
-#     keeps its warn but does not count as an effective rule, so an
-#     all-never-match list trips the zero-effective-rules guard while a
-#     mixed list still boots on its valid subset. The regexp-token seam in
-#     recipient-filter.sh is granted on the same template: any token
-#     STARTING with / classifies as regexp-family; the regexp_table(5)
-#     dual-pattern form /P1/[flags]!/P2/[flags] and the /pattern/flags form
-#     (flag set i/m/x, verified in-image against the pinned Postfix) are
-#     fully supported — structure-parsed, per-half compile-probed with
-#     flag-mirrored grep, and emitted verbatim as effective rules; a
-#     structurally unparseable leading-/ token (no closing delimiter,
-#     dangling or doubled !, unknown flag) draws a warn and is SUPPRESSED
-#     (status 10); and mid-token slashes in address tokens are correct
-#     escaped literals (/ is RFC 5321 atext — never warned).
+#     semantically-wrong values beyond those tiers. Existing warn arms are
+#     final; no new shape arm without a Tier 1/2 justification — Postfix's
+#     own runtime diagnostics are the source of truth beyond this point.
 
-# sanitize_token -- strip logfmt delimiters (backslash, double quote) and
-# control bytes (CR, VT, FF, ...), and bound the value to 512 bytes, so a
-# rejected raw value can be logged as a bounded, parseable logfmt field.
-# Values beyond the cap get a literal [truncated] marker appended.
+# Strips logfmt delimiters and control bytes, bounds to 512 bytes with a
+# literal [truncated] marker, so a rejected value logs as one parseable field.
 sanitize_token() {
   printf '%.512s' "$1" | LC_ALL=C tr -d '\\"[:cntrl:]'
   if [ "${#1}" -gt 512 ]; then
     printf '[truncated]'
   fi
 }
-# Shell integers are compared with test(1), which aborts with "Illegal
-# number" beyond LONG_MAX while an `if` swallows that error as "in range".
-# 18 digits is the widest count that can never exceed LONG_MAX (2^63-1 has
-# 19 digits). Single source of truth for the three length guards below.
+# test(1) aborts with "Illegal number" beyond LONG_MAX while an `if` swallows
+# that as "in range"; 18 digits is the widest count that can never exceed it
+# (2^63-1 has 19). Single source of truth for the length guards below.
 readonly MAX_INT_DIGITS=18
 
-# int_too_wide VALUE -- true when VALUE has more digits than test(1) can
-# compare safely. Callers log their own site-specific context.
 int_too_wide() { [ "${#1}" -gt "$MAX_INT_DIGITS" ]; }
 
 validate_numeric() {
@@ -115,9 +66,6 @@ validate_numeric() {
       return 1
       ;;
   esac
-  # Reject values too long to compare as shell integers: test(1) aborts with
-  # "Illegal number" beyond LONG_MAX, and validate_range's `if` silently
-  # swallows that error and treats the value as in-range.
   if int_too_wide "$2"; then
     printf 'level=error msg="env var numeric value too large" var=%s length=%d\n' "$1" "${#2}" >&2
     return 1
@@ -133,15 +81,12 @@ validate_no_metacharacters() {
   esac
 }
 
-# Validate that a numeric value falls within [min, max].
-# Usage: validate_range VAR_NAME VALUE MIN MAX
-# Precondition: VALUE has already passed validate_numeric. The spec table in
-# entrypoint.sh orders `num` before `range=` on every row, which is
-# load-bearing twice: a non-numeric or >18-digit value would make both test(1)
-# comparisons error out and the `if` would swallow that as "in range" (see the
-# length-guard comment in validate_numeric), and the raw value="%s"
-# interpolation below is exempt from the no-raw-token logging rule only
-# because the value is guaranteed digits-only here.
+# validate_range VAR VALUE MIN MAX. Precondition: VALUE already passed
+# validate_numeric — entrypoint.sh's spec table orders `num` before `range=`
+# on every row so a non-numeric or >18-digit value can never reach the `if`
+# below, which would otherwise swallow "Illegal number" as in-range; the raw
+# value="%s" interpolation is exempt from the no-raw-token rule for the same
+# reason (guaranteed digits-only here).
 validate_range() {
   if [ "$2" -lt "$3" ] || [ "$2" -gt "$4" ]; then
     printf 'level=error msg="env var out of range" var=%s value="%s" min=%s max=%s\n' "$1" "$2" "$3" "$4" >&2
@@ -149,44 +94,26 @@ validate_range() {
   fi
 }
 
-# Size bounds for RECIPIENT_RESTRICTIONS. Hard-coded, with no env-var
-# override on purpose: this image renders smtpd_recipient_restrictions itself
-# and exposes no access-map or policy-service setting, so a deployment that
-# genuinely needs thousands of rules needs a Postfix deployment of its own
-# with a table or a policy service, not a bigger knob here.
-# Rendering the recipient map spawns external processes PER RULE -- a sed
-# escape for a literal, an awk structure parse plus grep compile/match
-# probes for a regexp construct -- on the startup path, before Postfix binds
-# port 25 and under no deadline of its own. Measured on this host: ~1.4ms
-# per plain rule, ~4.3ms per regexp rule, linear in the rule count. The
-# container healthcheck's start-period is 15s, so an unbounded list delays a
-# boot that then SUCCEEDS past the point monitoring would notice it. 256
-# rules is ~1.1s at the regexp rate, an order of magnitude inside that
-# budget: the cap is a conservative fixed budget, NOT the measured point
-# where a boot actually misses the start-period (that is thousands of
-# rules), and the rule count is the real bound because the cost scales per
-# rule.
+# RECIPIENT_RESTRICTIONS size bounds. Hard-coded with no env override: this
+# image renders smtpd_recipient_restrictions itself with no access-map or
+# policy-service setting, so a deployment needing more needs its own Postfix.
+# Rendering spawns an external process per rule (sed/awk/grep) before Postfix
+# binds port 25 with no deadline; measured ~1.4ms/plain rule, ~4.3ms/regexp
+# rule on this host. 256 rules is ~1.1s, an order of magnitude inside the 15s
+# healthcheck start-period.
 readonly MAX_RECIPIENT_RULES=256
-# The looser second bound, against the shape a rule count cannot see: one
-# pathological giant token. Wide enough to keep admitting a single ~8 KiB
-# regexp construct (tests/render-test.sh pins that shape), which is already
-# far past any hand-written pattern.
+# The byte bound, against a shape a rule count cannot see (one pathological
+# giant token). Wide enough to admit the ~8 KiB regexp construct
+# tests/render-test.sh pins.
 readonly MAX_RECIPIENT_BYTES=16384
 
-# validate_recipient_rule_count VAR VALUE -- upper bound on how many rules
-# RECIPIENT_RESTRICTIONS may carry (MAX_RECIPIENT_RULES above). Counts the
-# whitespace-separated tokens the renderer itself will iterate: default-IFS
-# field splitting collapses runs of whitespace and ignores leading and
-# trailing whitespace, so padding or a repeated separator cannot inflate the
-# count. Same `set -f` premise as validate_no_open_relay's loop (entrypoint.sh
-# disables pathname expansion, so a glob metacharacter in a token stays one
-# token instead of expanding to file names).
-# Upper bound ONLY: a zero-token value belongs to the zero-effective-rules
-# guard in recipient-filter.sh, which already names the whitespace-only case,
-# so this check must not pre-empt it with a vaguer message.
+# validate_recipient_rule_count VAR VALUE — upper bound on rule count
+# (MAX_RECIPIENT_RULES). Counts whitespace-separated tokens the renderer
+# itself will iterate (default-IFS splitting collapses whitespace runs, so
+# padding cannot inflate the count); `set -f` premise matches
+# validate_no_open_relay's loop. Upper bound only: a zero-token value is the
+# zero-effective-rules guard's case (recipient-filter.sh), not this one's.
 validate_recipient_rule_count() {
-  # Copy the var name up front: the count below repurposes the positional
-  # parameters via `set --` (same idiom as validate_fingerprint_match).
   _rr_var=$1
   # shellcheck disable=SC2086
   set -- $2
@@ -197,26 +124,16 @@ validate_recipient_rule_count() {
   fi
 }
 
-# validate_recipient_byte_length VAR VALUE -- upper bound on the whole
-# value's byte length (MAX_RECIPIENT_BYTES above), the looser guard against
-# one giant token the rule count cannot see. The spec table orders the rule
-# count first: a list that breaks both bounds is a rule-count problem, and
-# that message is the actionable one.
-# wc -c, not ${#VALUE}: the shells that actually run this disagree on what
-# ${#} means for a multibyte value (BusyBox ash built with unicode support
-# reports characters, dash reports bytes), and the bound is about the bytes
-# the renderer and Postfix handle. Arithmetic expansion normalizes the
-# count, which some wc implementations pad with blanks, into a bare integer
-# for both the comparison and the log field.
+# validate_recipient_byte_length VAR VALUE — upper bound on the whole
+# value's byte length (MAX_RECIPIENT_BYTES). Ordered after the rule count in
+# the spec table: a list breaking both is a rule-count problem, the
+# actionable message.
+# wc -c, not ${#VALUE}: BusyBox ash and dash disagree on what ${#} means for
+# a multibyte value, and the bound is about bytes the renderer/Postfix
+# handle.
 validate_recipient_byte_length() {
-  # Upper bound on a value that carries rules, like the rule count above:
-  # a value that field-splits to ZERO tokens carries none however long its
-  # padding is, and that case belongs to the zero-effective-rules guard in
-  # recipient-filter.sh, which names it precisely ("whitespace only, or every
-  # entry malformed..."). Refusing 16 KiB of spaces here as "too long" would
-  # pre-empt that message with a vaguer one. Same copy-then-`set --` idiom and
-  # same default-IFS/`set -f` premise as validate_recipient_rule_count, so the
-  # split matches the renderer's own iteration.
+  # A value that field-splits to zero tokens belongs to the
+  # zero-effective-rules guard in recipient-filter.sh, not here.
   _rr_var=$1
   _rr_value=$2
   # shellcheck disable=SC2086
@@ -233,16 +150,11 @@ validate_recipient_byte_length() {
   fi
 }
 
-# warn_relay_host_colon_shape CANDIDATE DISPLAY -- shared colon classifier
-# for RELAY_HOST: warn when CANDIDATE looks like host:port rather than an
-# IPv6 address. Exactly one colon can never be IPv6 (even ::1 has two), so
-# it is host:port regardless of character set (192.0.2.10:587, deadbeef:587
-# -- both all-hex, both silent under the old check). Two or more colons:
-# plausibly IPv6; warn only on characters invalid in an IPv6 address (also
-# catches %zone ids). DISPLAY is the original value to log: bracketed
-# callers pass the bracket interior as CANDIDATE but the full value as
-# DISPLAY. A single copy of the message keeps the logfmt contract in one
-# place.
+# warn_relay_host_colon_shape CANDIDATE DISPLAY — warn when CANDIDATE looks
+# like host:port rather than IPv6 (exactly one colon can never be IPv6, even
+# ::1 has two; two+ colons is plausibly IPv6, warn only on invalid chars).
+# DISPLAY is the original value to log; bracketed callers pass the bracket
+# interior as CANDIDATE but the full value as DISPLAY.
 warn_relay_host_colon_shape() {
   _rh_candidate=$1
   _rh_display=$2
@@ -265,28 +177,16 @@ warn_relay_host_colon_shape() {
   esac
 }
 
-# validate_relay_host_shape VALUE -- shape check for RELAY_HOST. Two shape
-# classes pass the metacharacter checks (a colon must be allowed for bare
-# IPv6) but render a relayhost Postfix cannot use, deferring all mail at
-# first send with only a maillog error:
-#   - bracket defects ([host]:587, [host, [], [[host]], [host]:587]):
-#     compute_relayhost trusts the leading bracket and appends :$RELAY_PORT
-#     verbatim, rendering [host]:587:587, an unbalanced bracket, or a
-#     malformed literal. No legitimate RELAY_HOST ever matches these
-#     shapes, so they are fatal (return 1; the caller exits 2).
-#   - a host:port value (smtp.example.com:587): the colon-bearing value is
-#     bracketed whole, rendering [smtp.example.com:587]:587, an address
-#     literal that never resolves (a hostname cannot contain a colon; only
-#     an IPv6 address legitimately does). Warn-only: this arm is a
-#     heuristic an exotic value could trip, so rejecting it would be a
-#     config-acceptance change.
+# validate_relay_host_shape VALUE — shape check for RELAY_HOST. Two classes
+# pass the metacharacter checks but render a relayhost Postfix can't use,
+# deferring all mail with only a maillog error:
+#   - bracket defects: compute_relayhost trusts the leading bracket and
+#     appends :$RELAY_PORT verbatim, rendering a malformed literal. Fatal.
+#   - host:port (smtp.example.com:587): bracketed whole, never resolves.
+#     Warn-only — a heuristic an exotic value could trip.
 validate_relay_host_shape() {
   case "$1" in
     \[*\])
-      # Outer brackets alone are not proof of a well-formed literal: strip
-      # them and reject when the interior is empty or still contains a
-      # bracket ([], [[host]], [host]:587] -- compute_relayhost trusts the
-      # leading bracket, so the rendered relayhost is malformed).
       _rh_inner=${1#\[}
       _rh_inner=${_rh_inner%\]}
       case "$_rh_inner" in
@@ -296,10 +196,6 @@ validate_relay_host_shape() {
           return 1
           ;;
       esac
-      # The bracket interior still needs the colon-shape classifier:
-      # [smtp.example.com:587] is a host:port value bracketed whole, and
-      # compute_relayhost appends :$RELAY_PORT, rendering
-      # [smtp.example.com:587]:587 -- a literal that never resolves.
       warn_relay_host_colon_shape "$_rh_inner" "$1"
       return 0
       ;;
@@ -309,10 +205,6 @@ validate_relay_host_shape() {
       return 1
       ;;
     *\[* | *\]*)
-      # A bracket anywhere in a non-bracket-leading value renders a malformed
-      # relayhost ([host]]:587): no legitimate hostname or IPv6 address
-      # contains a stray bracket. Deliberately warn-only: Tier 3 of the
-      # validation policy in the header (grandfathered-final warn arm).
       printf 'level=warn msg="RELAY_HOST contains a stray bracket; the rendered relayhost will be malformed and Postfix will defer all mail" relay_host="%s"\n' \
         "$(sanitize_token "$1")" >&2
       ;;
@@ -328,18 +220,13 @@ validate_ipv6_cidr() {
     printf 'level=error msg="IPv6 prefix out of range" network="%s" prefix=%s\n' "$(sanitize_token "$_net")" "$_prefix" >&2
     return 1
   fi
-  # A second / in the entry (fd00::/8/9) survives the prefix parse: the
-  # trailing /9 becomes the prefix and the address part keeps /8, so
-  # compute_mynetworks renders [fd00::/8]/9 -- Postfix logs a "bad
-  # net/mask pattern" warning and the entry never matches, silently
-  # excluding the operator's IPv6 LAN. Fatal, restoring parity with the
-  # IPv4 arm, which rejects the same shape (the embedded / makes an
-  # octet non-numeric).
-  # Postfix mynetworks format allows an already-bracketed IPv6 entry
-  # ([fd00::]/8, per postconf(5)); compute_mynetworks passes it through
-  # verbatim, so it is a valid, matching shape. Strip the brackets before
-  # the shape checks so the invalid-character arm does not false-warn
-  # "never match" on it; the inner address still gets the check.
+  # A second / in the entry (fd00::/8/9) survives the prefix parse (the
+  # trailing /9 becomes the prefix), rendering [fd00::/8]/9: Postfix logs a
+  # bad net/mask pattern and the entry never matches, silently excluding the
+  # LAN. Fatal, matching the IPv4 arm's parity below.
+  # Postfix's mynetworks format allows an already-bracketed IPv6 entry
+  # ([fd00::]/8, postconf(5)); strip brackets before the shape checks so a
+  # legitimate value doesn't false-warn on the invalid-character arm.
   _v6_addr="${_net%/*}"
   case "$_v6_addr" in
     \[*\])
@@ -354,12 +241,10 @@ validate_ipv6_cidr() {
       return 1
       ;;
     *[!0-9a-fA-F:.]*)
-      # Postfix expands $name in main.cf parameter values (postconf(5)), so a
-      # non-address character (e.g. $) is rewritten by config-parameter
-      # expansion before the net/mask parse; either way the rendered entry is
-      # a bad net/mask pattern that never matches, silently excluding the
-      # intended LAN. Warn-only: rejecting it would be a config-acceptance
-      # change (the multi-slash arm above is fatal by explicit user decision).
+      # Postfix expands $name in main.cf values (postconf(5)), so a
+      # non-address character rewrites via config-parameter expansion; either
+      # way the rendered entry never matches. Warn-only: rejecting would be a
+      # config-acceptance change.
       printf 'level=warn msg="IPv6 network entry contains characters invalid in an IPv6 address; this network will never match (a $ is expanded as a Postfix config parameter)" network="%s"\n' \
         "$(sanitize_token "$_net")" >&2
       ;;
@@ -375,9 +260,8 @@ validate_ipv4_cidr() {
     return 1
   fi
   # POSIX field splitting drops a trailing empty field, so "192.168.1.2./24"
-  # would split into four valid octets and pass; reject the trailing dot the
-  # split cannot see (leading and doubled dots already yield an empty octet
-  # the per-octet check catches).
+  # would split into four valid octets and pass; reject the trailing dot
+  # explicitly (leading/doubled dots already yield an empty octet caught below).
   case "$_ip" in
     *.)
       printf 'level=error msg="IPv4 address has a trailing dot" network="%s"\n' "$(sanitize_token "$_net")" >&2
@@ -400,7 +284,6 @@ validate_ipv4_cidr() {
         return 1
         ;;
     esac
-    # Same LONG_MAX guard as validate_numeric; see int_too_wide.
     if int_too_wide "$_oct"; then
       printf 'level=error msg="IPv4 octet too large" network="%s" length=%d\n' "$(sanitize_token "$_net")" "${#_oct}" >&2
       return 1
@@ -409,12 +292,10 @@ validate_ipv4_cidr() {
       printf 'level=error msg="IPv4 octet out of range" network="%s" octet=%s\n' "$(sanitize_token "$_net")" "$_oct" >&2
       return 1
     fi
-    # Postfix's network parser (inet_pton-based) rejects leading-zero octets
-    # at runtime ("bad network value ... skipping this rule", verified against
-    # the shipped image), so the entry never matches and the intended LAN is
-    # silently excluded while validation stays green. Fatal by explicit user
-    # decision (same posture as the IPv6 multi-slash arm), restoring parity
-    # with the other IPv4 shape rejections above.
+    # Postfix's inet_pton-based network parser rejects leading-zero octets at
+    # runtime ("bad network value", verified in-image), silently excluding
+    # the LAN while validation stays green. Fatal, matching the IPv6
+    # multi-slash arm's posture.
     case "$_oct" in
       0[0-9]*)
         printf 'level=error msg="IPv4 octet has a leading zero; Postfix rejects this network entry at runtime (bad network value) and it would never match, silently excluding the intended LAN" network="%s" octet=%s\n' \
@@ -425,18 +306,14 @@ validate_ipv4_cidr() {
   done
 }
 
-# warn_public_network NET IP PREFIX -- the open-relay guard below rejects the
+# warn_public_network NET IP PREFIX — the open-relay guard below rejects the
 # two all-address literals and any prefix under /8, but a /8 (or /16, /32 in
-# IPv6) can still sit entirely inside PUBLIC address space: 192.168.0.0/8
-# masks to 192.0.0.0/8 and authorizes ~16M Internet hosts to relay, and
-# 2000::/16 authorizes a slice of global-unicast IPv6. Postfix accepts both
-# silently and the healthcheck stays green, so the only signal is this warn.
-# Warn, not fatal: a deployment relaying for a public subnet it owns is
-# legitimate, so refusing would be a config-acceptance change.
-# Containment is decided from the leading octets plus the prefix, which is
-# exact for the RFC 1918 / RFC 6598 / RFC 3927 / RFC 4193 / RFC 4291 blocks
-# (an entry inside the block whose prefix is at least the block's prefix is
-# contained, whatever the host bits Postfix masks off).
+# IPv6) can still sit entirely inside PUBLIC address space (192.168.0.0/8
+# masks to 192.0.0.0/8, authorizing ~16M Internet hosts). Postfix accepts
+# both silently, so this warn is the only signal. Warn, not fatal: a
+# deployment relaying for a public subnet it owns is legitimate.
+# Containment is decided from the leading octets plus the prefix, exact for
+# the RFC 1918/6598/3927/4193/4291 blocks.
 warn_public_network() {
   _wpn_addr=$(printf '%s' "$2" | LC_ALL=C tr 'ABCDEF' 'abcdef')
   case "$_wpn_addr" in
@@ -455,8 +332,7 @@ warn_public_network() {
       [ "$3" -ge 10 ] && return 0
       ;;
     # IPv6: fc00::/7 (ULA) and fe80::/10 (link-local). The first hextet must
-    # be spelled in full (fc5:: is 0x0fc5, NOT inside fc00::/7), so match four
-    # hex digits followed by the separator.
+    # be spelled in full (fc5:: is 0x0fc5, not inside fc00::/7).
     f[cd][0-9a-f][0-9a-f]:*) [ "$3" -ge 7 ] && return 0 ;;
     fe[89ab][0-9a-f]:*) [ "$3" -ge 10 ] && return 0 ;;
     ::1) [ "$3" -ge 128 ] && return 0 ;;
@@ -469,7 +345,6 @@ validate_no_open_relay() {
   for _net in $1; do
     case "$_net" in
       0.0.0.0/0 | ::/0)
-        # Exact-matched literal (0.0.0.0/0 or ::/0), sanitized for uniformity.
         printf 'level=error msg="network list contains open-relay CIDR" network="%s"\n' "$(sanitize_token "$_net")" >&2
         return 1
         ;;
@@ -485,7 +360,6 @@ validate_no_open_relay() {
         return 1
         ;;
     esac
-    # Same LONG_MAX guard as validate_numeric; see int_too_wide.
     if int_too_wide "$_prefix"; then
       printf 'level=error msg="network CIDR prefix too large" network="%s" length=%d\n' "$(sanitize_token "$_net")" "${#_prefix}" >&2
       return 1
@@ -495,13 +369,6 @@ validate_no_open_relay() {
       return 1
     fi
 
-    # IP shape validation: reject malformed entries the operator would not
-    # notice -- wrong octet count (192.168.1/24), out-of-range octets
-    # (192.168.1.300/24), or non-numeric octets -- that would silently exclude
-    # the intended LAN from relaying. IPv4 requires four dotted octets each
-    # 0-255. IPv6 is detected by `:`: validate_ipv6_cidr fatally rejects
-    # multi-slash entries and warns on invalid address characters; per-group
-    # (hextet) validation stays delegated to Postfix.
     _ip="${_net%/*}"
     case "$_ip" in
       *:*) validate_ipv6_cidr "$_net" "$_prefix" || return 1 ;;
@@ -515,55 +382,40 @@ validate_no_open_relay() {
   done
 }
 
-# Valid TLS security levels (single source of truth).
+# Valid TLS security levels.
 readonly TLS_LEVELS="none may encrypt dane dane-only fingerprint verify secure"
 
 validate_tls_level() {
   for _lvl in $TLS_LEVELS; do
     [ "$1" = "$_lvl" ] && return 0
   done
-  # The rejected value is unvalidated input; do not interpolate it (logfmt
-  # quoting) — the allowlist is enough context to fix the config.
   printf 'level=error msg="invalid TLS security level" var=SMTP_TLS_SECURITY_LEVEL valid="%s"\n' "$TLS_LEVELS" >&2
   return 1
 }
 
-# validate_fingerprint_digest VALUE -- allowlist for
-# SMTP_TLS_FINGERPRINT_DIGEST. sha256 and sha512 only: md5 and sha1 are
-# rejected to match this image's security posture (it already narrows
-# upstream Postfix defaults to >=TLSv1.2 and high ciphers), and a
-# collision-weak digest as the sole trust anchor defeats the point of
-# fingerprint pinning.
+# sha256/sha512 only; md5/sha1 are collision-weak and rejected as trust anchors.
 validate_fingerprint_digest() {
   case "$1" in
     sha256 | sha512) return 0 ;;
   esac
-  # The rejected value is unvalidated input; do not interpolate it (logfmt
-  # quoting) — the allowlist is enough context to fix the config.
   printf 'level=error msg="invalid fingerprint digest (md5/sha1 are rejected: collision-weak digests cannot anchor trust)" var=SMTP_TLS_FINGERPRINT_DIGEST valid="sha256 sha512"\n' >&2
   return 1
 }
 
-# validate_fingerprint_match MATCH DIGEST -- format check for
-# SMTP_TLS_FINGERPRINT_CERT_MATCH (Tier 2, explicit user decision). Postfix
-# compares each configured digest against the peer certificate/public-key
+# validate_fingerprint_match MATCH DIGEST — format check for
+# SMTP_TLS_FINGERPRINT_CERT_MATCH (Tier 2). Postfix compares each configured
 # digest as colon-separated hex pairs (postconf(5)
-# smtp_tls_fingerprint_cert_match); a token in any other shape -- non-hex
-# characters, missing/doubled colons, or a pair count that does not match
-# the digest length (sha256 = 32 pairs, sha512 = 64) -- can never match any
-# peer, so the level=fingerprint relay would defer every delivery with
-# maillog-only diagnostics. Deterministic never-match => fatal.
+# smtp_tls_fingerprint_cert_match); a token in any other shape can never
+# match any peer, so a level=fingerprint relay would defer every delivery.
+# Deterministic never-match => fatal.
 validate_fingerprint_match() {
-  # Copy both args up front: the pair count below repurposes the positional
-  # parameters via `set --`.
   _fm_match=$1
   _fm_digest=$2
   _fm_want_pairs=32
   [ "$_fm_digest" = sha512 ] && _fm_want_pairs=64
   for _fm_token in $_fm_match; do
-    # Reject shapes the colon split below cannot see: a leading, trailing,
-    # or doubled colon yields an empty pair that POSIX field splitting can
-    # drop (a trailing colon would otherwise pass with a correct count).
+    # A leading, trailing, or doubled colon yields an empty pair that POSIX
+    # field splitting drops, which would otherwise fool the pair-count check.
     case "$_fm_token" in
       *[!0-9a-fA-F:]* | :* | *: | *::*)
         printf 'level=error msg="fingerprint match token is not colon-separated hex pairs; it can never match any peer and every delivery would defer" var=SMTP_TLS_FINGERPRINT_CERT_MATCH token="%s"\n' \
@@ -594,41 +446,23 @@ validate_fingerprint_match() {
   done
 }
 
-# Reject exactly the SASL credential shapes the sasl_passwd map cannot carry, and
-# nothing else. The record is `<relayhost> <login>:<password>`: postmap(1) ends the
-# KEY at the first unquoted whitespace, then trims leading and trailing whitespace
-# from the VALUE, and smtp_sasl_passwd_lookup splits that value at the first
-# smtp_sasl_passwd_res_delim (`:`). The value spans `<login>:<password>`, so only
-# its two outer edges are exposed to the trim: everything between them, INCLUDING
-# the login's tail and the password's head, is interior and survives verbatim.
-# Measured against the Postfix pinned in this image (postmap + postmap -q), and
-# re-measured in the shipped image under BusyBox ash:
-#   MANGLED, so the credential can never authenticate  -> fatal
-#     login leading whitespace     ` user`     -> `user`      trimmed (5B -> 4B)
-#     password trailing whitespace `trailing ` -> `trailing`  trimmed (9B -> 8B)
-#     colon anywhere in the login  `us:er`     -> `us`        first-colon split
-#     login trailing newline       `user\n`    -> ends the record line before the
-#                                                 delimiter, so the login lands
-#                                                 with no password at all
-#   PRESERVED byte-for-byte -> accepted, because refusing a value that works is
-#   what issue #392 was:
-#     password interior whitespace `a b c d`   (the Gmail App Password shape)
-#     password leading whitespace  ` leading`
-#     login interior whitespace    `first last`
-#     login trailing whitespace    `user `     (space/tab/VT/FF/CR; not newline)
-#     colon anywhere in the password           (split takes the FIRST colon only)
-# The fatal set is Tier 2 by the policy above: each entry is a documented
-# never-works combination, not a taste judgment. The preserved set stays Tier 3 --
-# the operator's business, exactly like a typo'd hostname -- so an outer space that
-# survives the map is NOT refused here even though it is more often a paste
-# artifact than a credential. An earlier revision of this fix did refuse those two
-# positions as hygiene; that was a new fatal shape arm without a Tier 1/2
-# justification, which this policy forbids, and it repeated in miniature the defect
-# #392 reported.
-#
-# "Whitespace" means ASCII whitespace throughout: Postfix's own ISSPACE is
-# ASCII-gated, so U+00A0 and friends are ordinary content to the parser and to
-# these validators (measured: accepted).
+# Reject exactly the SASL credential shapes the sasl_passwd map cannot carry.
+# Record is `<relayhost> <login>:<password>`: postmap(1) ends the key at the
+# first whitespace, trims leading/trailing whitespace from the value, then
+# smtp_sasl_passwd_lookup splits that value at the first colon. Only the
+# value's two outer edges are trimmed; everything between — including the
+# login's tail and password's head — is interior and survives verbatim.
+# Measured against the pinned Postfix (postmap + postmap -q) and re-measured
+# under BusyBox ash in the shipped image:
+#   MANGLED (fatal): login leading whitespace (trimmed), password trailing
+#     whitespace (trimmed), a colon anywhere in the login (first-colon
+#     split), a login trailing newline (ends the record before the delimiter)
+#   PRESERVED (accepted): password interior/leading whitespace (the Gmail
+#     App Password shape), login interior/trailing whitespace, a colon
+#     anywhere in the password (first-colon split takes only the login side)
+# The fatal set is Tier 2: each is a documented never-works combination.
+# "Whitespace" is ASCII whitespace only — Postfix's ISSPACE is ASCII-gated,
+# so U+00A0 is ordinary content to both Postfix and these validators.
 validate_sasl_login() {
   case "$1" in
     *:*)
@@ -639,10 +473,9 @@ validate_sasl_login() {
       printf 'level=error msg="RELAY_LOGIN must not start with whitespace; postmap trims it off the map value, so the login sent upstream would differ from the one configured (whitespace inside or after the login is kept)"\n' >&2
       return 1
       ;;
-    # A trailing newline survives validate_no_newlines' deliberate one-newline
-    # carve-out, and unlike other trailing whitespace it ends the record line
-    # before the delimiter, leaving the login with no password. Literal newline in
-    # the pattern, same idiom as validate_no_newlines' strip above.
+    # A trailing newline survives validate_no_newlines' one-newline
+    # carve-out but ends the record line before the delimiter, leaving the
+    # login with no password.
     *"
 ")
       printf 'level=error msg="RELAY_LOGIN must not end with a newline; it would end the credential record before the password and no delivery could authenticate"\n' >&2

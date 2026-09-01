@@ -1,35 +1,26 @@
 #!/bin/sh
-# recipient-filter.sh — recipient-filtering logic sourced by entrypoint.sh.
-# Reads RECIPIENT_RESTRICTIONS (already validated) and sets
+# Recipient-filtering logic sourced by entrypoint.sh. Reads
+# RECIPIENT_RESTRICTIONS (already validated) and sets
 # SMTPD_RECIPIENT_RESTRICTIONS for main.cf generation.
 #
-# Token classification (emit_recipient_rule): any token STARTING with /
-# is regexp-family and gets the full regexp_table(5) structure parse
-# (/pattern/, flag-suffixed /pattern/flags, and the dual-pattern form
-# /pattern1/[flags]!/pattern2/[flags]); a token containing @ is a full
-# address rendered as an anchored escaped literal; anything else is a
-# domain rendered as an anchored @-suffix literal. A mid-token slash
-# WITHOUT a leading slash is not regexp syntax: / is legal RFC 5321 atext,
-# so john/doe@example.com is a correct address-arm literal (escaped,
-# matched literally, never warned), while a slash-bearing domain token
-# still draws its arm's mis-typed-regexp warn (a domain can never
-# contain /).
+# emit_recipient_rule token classification: a token starting with / is
+# regexp-family (regexp_table(5): /pattern/, /pattern/flags, or the dual
+# form /p1/[flags]!/p2/[flags]); a token containing @ is a full address
+# rendered as an anchored escaped literal; anything else is a domain
+# rendered as an anchored @-suffix literal. A mid-token slash without a
+# leading slash is legal RFC 5321 atext (john/doe@example.com), never
+# regexp syntax.
 
-# Escape user-supplied recipient tokens so they are matched literally (not as
-# regex) when rendered inside /^.../ or /@.../ patterns below. The character
-# class uses ] first (POSIX requirement), escapes / because it is the Postfix
-# regexp delimiter, and uses # as the sed delimiter to avoid doubling slashes.
-# Both { and } are escaped together so the class stays symmetric and obviously
-# covers every metacharacter of the POSIX regular expressions that Postfix
-# regexp: tables use (the class would also cover pcre: if the map type ever
-# changed).
+# Escapes a recipient token for literal matching inside /^.../ or /@.../
+# patterns. ] first (POSIX class requirement); / escaped as the Postfix
+# regexp delimiter; # as the sed delimiter to avoid doubling slashes.
 escape_postfix_regex() {
   printf '%s' "$1" | sed 's#[].[\\^$*+?(){}|/]#\\&#g'
 }
 
-# emit_rcpt_line LINE — append one rule line to the recipient_access temp
-# file, converting a write failure (ENOSPC, EROFS) into a structured
-# level=error plus temp-file cleanup instead of a raw set -e diagnostic.
+# Appends one rule line to the recipient_access temp file; a write failure
+# (ENOSPC, EROFS) becomes a structured error plus temp-file cleanup instead
+# of a raw set -e diagnostic.
 emit_rcpt_line() {
   if ! printf '%s\n' "$1" >>"$_rcpt_tmp"; then
     printf 'level=error msg="failed to write recipient_access (disk full or read-only?)" path="%s"\n' "$(sanitize_token "$_rcpt_tmp")" >&2
@@ -38,11 +29,8 @@ emit_rcpt_line() {
   fi
 }
 
-# emit_escaped_literal_rule ANCHOR TOKEN -- escape TOKEN for literal matching
-# and append the anchored rule line (ANCHOR is '/^' for the address arm,
-# '/@' for the domain arm). A sed failure is a runtime error: structured
-# level=error, temp-file cleanup, exit 1 -- the contract shared by both
-# literal arms.
+# emit_escaped_literal_rule ANCHOR TOKEN — escapes TOKEN and appends the
+# anchored rule line ('/^' for the address arm, '/@' for the domain arm).
 emit_escaped_literal_rule() {
   if ! _esc=$(escape_postfix_regex "$2"); then
     printf 'level=error msg="failed to escape recipient restriction for rendering"\n' >&2
@@ -52,37 +40,22 @@ emit_escaped_literal_rule() {
   emit_rcpt_line "${1}${_esc}\$/ OK"
 }
 
-# parse_regexp_construct TOKEN — structure-parse a leading-/ token into the
-# regexp_table(5) forms this image supports:
-#   /P/                        plain pattern
-#   /P/FLAGS                   flag-suffixed (FLAGS: one or more of i m x)
-#   /P1/[FLAGS]!/P2/[FLAGS]    dual-pattern: matches P1 AND NOT P2
-# Sets _rx_p1/_rx_f1 (first half + flags), _rx_dual (0|1), _rx_p2/_rx_f2.
-# Returns 1 on any other leading-/ structure: no closing delimiter (Postfix
-# skips such a line at map load with a 'no closing regexp delimiter'
-# warning — verified in-image with postmap -q against the pinned Postfix
-# 3.11.5), dangling !, a second half not /-delimited, more than one !
-# separator, or a flag char outside the verified set — the caller warns and
+# parse_regexp_construct TOKEN — structure-parses a leading-/ token into the
+# supported regexp_table(5) forms: /P/, /P/FLAGS, or /P1/[FLAGS]!/P2/[FLAGS]
+# (dual: matches P1 AND NOT P2). Sets _rx_p1/_rx_f1, _rx_dual (0|1),
+# _rx_p2/_rx_f2. Returns 1 on any other leading-/ structure (no closing
+# delimiter, dangling/doubled !, unknown flag) — the caller warns and
 # suppresses.
 # Pattern scanning mirrors dict_regexp: each half ends at its first
-# UNESCAPED / delimiter, a backslash escapes the next character (so \/
-# stays inside the pattern, exactly the escape escape_postfix_regex
-# produces for the literal arms), and escapes are preserved verbatim —
-# that is what Postfix hands to regcomp and what the grep probes must
-# therefore see. The flag set was verified in-image against the pinned
-# Postfix 3.11.5 (postmap -q probes on throwaway regexp maps):
-# i, m, and x all load and match; any other char makes postmap warn
-# 'unknown regexp option "<c>": skipping this rule' and drop that line
-# while the rest of the map still loads, so an unknown-flag token is
-# mirrored as unparseable structure (warn + ineffective), never emitted
-# and never fatal.
-# Keep this as one awk pass so token parsing stays linear in token length:
-# repeated shell slicing is quadratic, and validate.sh's MAX_RECIPIENT_BYTES
-# deliberately admits a single ~8 KiB regexp construct, so a quadratic scan
-# would hold PID 1 in pre-start validation at a length the bounds accept.
-# The single-line pipe and the heredoc read-back are safe because
-# emit_recipient_rule rejects whitespace-bearing tokens fatally, so TOKEN
-# can never contain a newline.
+# UNESCAPED /, a backslash escapes the next char, and escapes are preserved
+# verbatim (matching escape_postfix_regex's own output). Flags i/m/x were
+# verified in-image against the pinned Postfix 3.11.5 via postmap -q; any
+# other flag char makes postmap warn and drop the line, mirrored here as
+# unparseable structure. One awk pass keeps parsing linear in token length
+# (MAX_RECIPIENT_BYTES admits a single ~8 KiB construct; a quadratic scan
+# at that length would hold PID 1 in pre-start validation). The heredoc
+# read-back is safe because emit_recipient_rule rejects whitespace-bearing
+# tokens fatally, so TOKEN can never contain a newline.
 parse_regexp_construct() {
   _rx_fields=$(
     printf '%s\n' "$1" | awk '
@@ -129,19 +102,13 @@ $_rx_fields
 EOF
 }
 
-# half_flag_state FLAGS — fold one half's flag string into its effective
-# matcher state, mirroring dict_regexp exactly: matching starts
-# case-insensitive with extended (ERE) syntax; each i TOGGLES case
-# sensitivity and each x TOGGLES extended-vs-basic syntax. Repeated flags
-# re-toggle — verified in-image with postmap -q on the pinned Postfix
-# 3.11.5:
-# '/alerts@x/i OK' does NOT match ALERTS@X (i turns case sensitivity ON)
-# while '/alerts@x/ii OK' does; '/a+b@x/x OK' matches the literal a+b@x
-# and not aab@x (x switches regcomp to BASIC syntax) while /xx restores
-# ERE. m toggles multi-line matching (REG_NEWLINE), which cannot change
-# how a single-line recipient key matches, so it is accepted but not
-# mirrored in the probes. Sets _hf_ext (1 = ERE, 0 = BRE) and _hf_icase
-# (1 = case-insensitive).
+# half_flag_state FLAGS — folds one half's flag string into its effective
+# matcher state, mirroring dict_regexp: matching starts case-insensitive
+# with extended (ERE) syntax; each i TOGGLES case sensitivity, each x
+# TOGGLES extended-vs-basic syntax (verified in-image with postmap -q on
+# Postfix 3.11.5). m toggles multi-line matching, accepted but not mirrored
+# (cannot change how a single-line recipient key matches). Sets _hf_ext
+# (1=ERE, 0=BRE) and _hf_icase (1=case-insensitive).
 half_flag_state() {
   _hf_ext=1
   _hf_icase=1
@@ -155,19 +122,14 @@ half_flag_state() {
   done
 }
 
-# regex_half_compiles PATTERN EXT — compile-probe one pattern half with the
-# grep syntax matching its effective flags (EXT=1: grep -E / ERE; EXT=0:
-# plain grep / BRE — an x-flagged half hands Postfix's regcomp a BASIC
-# regex, so the probe must compile it as one too). BusyBox grep links the
-# same musl regcomp Postfix's regexp: tables use in this image. Two probes
-# per half: a bad regex exits 2 on both BusyBox
-# (v1.37, the pinned base) and GNU grep while valid-but-no-match exits 1,
-# so the standalone probe classifies exit >= 2 as uncompilable; the
-# prepended guaranteed-match alternation (^probe$|P, spelled ^probe$\|P
-# under BRE — supported by both greps) backstops any grep variant that
-# reports a bad regex as a silent exit 1. Prefixing rather than wrapping
-# keeps capture/backreference numbering unchanged and leaves unmatched
-# parentheses unmatched. Returns 0 when the half compiles.
+# regex_half_compiles PATTERN EXT — compile-probes one pattern half with the
+# grep syntax matching its effective flags (EXT=1: -E/ERE; EXT=0: BRE, to
+# mirror an x-flagged half's BASIC regcomp). BusyBox grep links the same
+# musl regcomp Postfix's regexp: tables use. A bad regex exits >=2 on both
+# BusyBox 1.37 and GNU grep, valid-but-no-match exits 1; the prepended
+# guaranteed-match alternation (^probe$|P) backstops a grep variant that
+# reports a bad regex as exit 1. Prefixing (not wrapping) keeps
+# capture/backreference numbering unchanged. Returns 0 when the half compiles.
 regex_half_compiles() {
   _rc_probe=0
   if [ "$2" -eq 1 ]; then
@@ -181,13 +143,9 @@ regex_half_compiles() {
   fi
 }
 
-# regex_half_matches PATTERN EXT ICASE STRING — match-probe one half
-# against STRING with grep flags mirroring the half's effective
-# regexp_table(5) state: -E only while the half is extended syntax, -i
-# only while it is case-insensitive. A half whose effective flags toggled
-# case sensitivity is probed case-SENSITIVELY, so /[A-Z]/i — a restrictive,
-# case-sensitive pattern under Postfix's toggle semantics — is probed the
-# way Postfix will actually match it.
+# regex_half_matches PATTERN EXT ICASE STRING — match-probes one half
+# against STRING with grep flags mirroring its effective regexp_table(5)
+# state (-E only while extended, -i only while case-insensitive).
 regex_half_matches() {
   _rm_opts=''
   [ "$2" -eq 1 ] && _rm_opts='E'
@@ -200,12 +158,8 @@ regex_half_matches() {
 }
 
 # regexp_construct_matches PROBE — does the FULL parsed construct match
-# PROBE the way Postfix will match a recipient key against the emitted
-# line? Single form: P1 matches. Dual form: P1 matches AND NOT P2 matches
-# (regexp_table(5) — verified in-image on 3.11.5:
-# '/.*@example\.com/!/^noreply@/ OK' returns OK for user@example.com and
-# nothing for noreply@example.com). Uses the per-half flag states the
-# caller computed via half_flag_state.
+# PROBE the way Postfix will? Single form: P1 matches. Dual form: P1
+# matches AND NOT P2 matches (regexp_table(5), verified in-image on 3.11.5).
 regexp_construct_matches() {
   regex_half_matches "$_rx_p1" "$_rx_ext1" "$_rx_icase1" "$1" || return 1
   if [ "$_rx_dual" -eq 1 ] \
@@ -215,9 +169,8 @@ regexp_construct_matches() {
   return 0
 }
 
-# set_regexp_flag_states — fold the parsed construct's flag strings into
-# per-half effective matcher states (see half_flag_state). Sets
-# _rx_ext1/_rx_icase1 from _rx_f1 and defaults _rx_ext2/_rx_icase2 to the
+# set_regexp_flag_states — folds the parsed construct's flag strings into
+# per-half effective matcher states. Defaults _rx_ext2/_rx_icase2 to the
 # ERE/case-insensitive start state, folding _rx_f2 only for the dual form.
 set_regexp_flag_states() {
   half_flag_state "$_rx_f1"
@@ -232,21 +185,19 @@ set_regexp_flag_states() {
   fi
 }
 
-# warn_uncompilable_half PATTERN -- single source of the compile-warn log
-# contract (the wording is Loki-queried; two hand-kept copies can drift)
-# plus the shared ineffective-status bookkeeping.
+# Single source of the compile-warn log contract plus the shared
+# ineffective-status bookkeeping.
 warn_uncompilable_half() {
   printf 'level=warn msg="recipient restriction regex does not compile; Postfix skips an uncompilable rule at map load and matching recipients will be rejected" pattern="%s"\n' \
     "$(sanitize_token "$1")" >&2
   _rcpt_status=10
 }
 
-# classify_regexp_halves — compile-probe each parsed pattern half with its
-# flag-mirrored grep syntax, warning per half. Status 10 keeps any
-# uncompilable half out of the effective-rule count, so an all-malformed
-# list still exits 2 at the zero-effective-rules guard.
+# classify_regexp_halves — compile-probes each parsed pattern half.
 # Sets _rcpt_status: 0 when every half compiles, 10 (ineffective) when
-# either half draws the compile warn.
+# either half draws the compile warn (excludes it from the effective
+# count, so an all-malformed list still trips the zero-effective-rules
+# guard).
 classify_regexp_halves() {
   _rcpt_status=0
   regex_half_compiles "$_rx_p1" "$_rx_ext1" || warn_uncompilable_half "$_rx_p1"
@@ -256,45 +207,19 @@ classify_regexp_halves() {
 }
 
 # reject_universal_construct ENTRY — universal-match (possibly-allow-all)
-# guard, applied to the FULL CONSTRUCT uniformly: single form — the
-# construct matches a probe iff P matches it; dual form — iff P1 matches
-# AND NOT P2 matches (exactly how Postfix evaluates the emitted line).
-# Fatal iff the construct matches BOTH probes — same rule, same message,
-# any spelling. The probes are two FIXED, dissimilar,
-# syntactically-valid-but-impossible addresses on reserved TLDs (RFC
-# 2606/6761). This is an honest HEURISTIC: matching both probes is treated
-# as possibly allow-all, not proof of it. It closes every universal
-# pattern — the empty-alternation typo class (/P|/, /|P/, /P||Q/, /()/),
-# nullable-quantifier spellings ((foo)?, a{0,3}, ^|x), broad spellings
-# (/./, /@/, /.+/, /.*/), and the dual near-allow-all /.*/!/^noreply@/
-# (universal P1, narrow except: both probes match — the feature is an
-# allowlist, so near-allow-all must be spelled as the empty var) — while
-# the supported narrowing idiom /.*@example\.com/!/^noreply@/ matches
-# neither probe and passes. Deliberately does NOT flag
-# broad-but-not-universal patterns (e.g. /@e/, TLD unions) — operator
-# judgment, mechanically undecidable. Over-fatal FP classes, fail-closed
-# and loud: (a) patterns keyed to the probe structure (e.g. /\.invalid/
-# beside a dead anchored-empty branch, or a nonce-structure-matching
-# branch) — no plausible authoring path in a recipient allowlist; (b)
-# shared-character members (/-/, /e/ — both probes contain hyphens and
-# common letters). The split remediation in the fatal message resolves the
-# plausible members of (b): /\.invalid$/ and /\.test$/ as SEPARATE entries
-# each match one probe only and pass. Never-match patterns (/^$/,
-# /^$|^addr$/) correctly PASS (not this guard's class; they boot as
-# reject-heavy configs, the fail-closed direction). The probes mirror each
-# half's EFFECTIVE flags via regex_half_matches (i/x toggle parity), so a
-# case-only-universal /[A-Z]/ still flags while the case-SENSITIVE
-# /[A-Z]/i correctly passes. The guard only runs
-# when every half compiled (an uncompilable half means Postfix skips the
-# whole line at map load — already warned, status 10 — so match probes
-# would be meaningless).
-# Tier 1 per validate.sh's validation policy ("any input that silently
-# turns a configured restriction into allow-all" — always fatal), the
-# same posture as the empty-pattern arms in emit_regexp_recipient_rule;
-# that policy header records this class as an explicit closed-set grant.
-# Returns 0 when the construct passes (status nonzero or either
-# probe misses); otherwise emits the fatal error, removes _rcpt_tmp, and
-# exits 2.
+# guard on the FULL CONSTRUCT: fatal iff it matches BOTH of two fixed,
+# dissimilar, syntactically-valid-but-impossible probe addresses on
+# reserved TLDs (RFC 2606/6761) — single form iff P matches, dual form iff
+# P1 matches AND NOT P2. This is an honest heuristic (possibly allow-all,
+# not proof), catching the empty-alternation typo class, nullable
+# quantifiers, broad spellings (/./, /@/, /.+/, /.*/), and dual
+# near-allow-all forms, while passing narrowing idioms like
+# /.*@example\.com/!/^noreply@/ and broad-but-not-universal patterns
+# (operator judgment). Probes mirror each half's effective flags via
+# regex_half_matches. Only runs when every half compiled (an uncompilable
+# half already means Postfix skips the line at map load — status 10).
+# Tier 1 per validate.sh's policy. Removes _rcpt_tmp and exits 2 on match;
+# otherwise returns 0.
 reject_universal_construct() {
   _rcpt_probe_a='q7probe@nonce-a.invalid'
   _rcpt_probe_b='k2xrf@check-b.test'
@@ -308,31 +233,18 @@ reject_universal_construct() {
   fi
 }
 
-# emit_regexp_recipient_rule ENTRY — render one leading-/ regexp-family
-# token. Structure-parses the token into the supported regexp_table(5)
-# forms (plain, flag-suffixed, dual-pattern), compile-probes each pattern
-# half with flag-mirrored grep (see the helpers above), applies the
-# construct-level universal-match guard, and emits structurally valid
-# tokens VERBATIM (the whole original token + ' OK') — Postfix parses the
-# dual/flags syntax natively, so the effective-rule count stays truthful.
-# dict_regexp ignores an uncompilable line at map-open time with only a
-# maillog warning, so the intended allow rule silently vanishes and the
-# /.*/ REJECT terminator rejects that mail; surface it at deploy time.
-# Compile-warn arms still warn and emit the line unchanged, but return 10
-# (ineffective) so the entry no longer satisfies the zero-rules guard — an
-# all-malformed list is fatal there. The
-# unparseable-structure arm also returns 10 but does NOT emit; see its
-# comment.
+# emit_regexp_recipient_rule ENTRY — renders one leading-/ regexp-family
+# token: structure-parses it, compile-probes each half, applies the
+# universal-match guard, and emits structurally valid tokens VERBATIM
+# (Postfix parses the dual/flags syntax natively). dict_regexp ignores an
+# uncompilable line at map-open with only a maillog warning, so surface it
+# at deploy time instead. Compile-warn arms still emit but return 10
+# (ineffective); the unparseable-structure arm returns 10 and does NOT emit.
 emit_regexp_recipient_rule() {
-  # Postfix's dict_regexp ends the pattern at the FIRST unescaped /, so any
-  # entry beginning with // (//, ///, //foo/) has an EMPTY effective first
-  # pattern whatever follows. An empty pattern compiles as
-  # a POSIX ERE that matches every string, so the rendered rule would allow
-  # ALL recipients before the /.*/ REJECT terminator (or dict_regexp drops
-  # the line as bad flags and matching mail is rejected) — the operator
-  # configured a restriction and silently got allow-all or reject-all. Fatal,
-  # matching the zero-rules guard's posture of refusing to render a map that
-  # allows or rejects all mail.
+  # dict_regexp ends the pattern at the FIRST unescaped /, so //, ///, //foo/
+  # all have an EMPTY effective first pattern, which compiles as a POSIX
+  # ERE matching every string — allow-all before the /.*/ REJECT terminator.
+  # Fatal, matching the zero-rules guard's posture.
   case "$1" in
     //*)
       printf 'level=error msg="recipient restriction regex is empty (Postfix ends the pattern at the first unescaped /) and would match all recipients; refusing to allow all mail" entry="%s"\n' \
@@ -341,35 +253,25 @@ emit_regexp_recipient_rule() {
       exit 2
       ;;
   esac
-  # Structure parse. An unparseable leading-/ token (no closing delimiter,
-  # dangling !, doubled !, unknown flag char) is warned and SUPPRESSED —
-  # deliberately diverging from the never-match arms' emit-anyway contract:
-  # those arms KNOW the rule is dead (Postfix loads it but no recipient can
-  # match), whereas this arm cannot know what an unvalidated structure
-  # would do inside Postfix (probed on 3.11.5: '/a@x/!/b/!/c/ OK' LOADS,
-  # silently absorbing '!/c/' into the lookup RESULT — semantics this
-  # validator never checked). Suppressing is safe: status 10 excludes the
-  # token from the effective count, the warn names it, and an all-such
-  # list exits 2 via the zero-effective-rules guard.
+  # An unparseable leading-/ token is warned and SUPPRESSED, diverging from
+  # the never-match arms' emit-anyway contract: those arms KNOW the rule is
+  # dead, whereas an unparseable structure's actual behavior inside Postfix
+  # is unknown (probed on 3.11.5: '/a@x/!/b/!/c/ OK' LOADS, silently
+  # absorbing '!/c/' into the lookup result — semantics this validator
+  # never checked).
   if ! parse_regexp_construct "$1"; then
     printf 'level=warn msg="cannot parse regexp token structure; supported forms: /pattern/, /pattern/flags, /pattern1/!/pattern2/ (flags: i, m, x)" entry="%s"\n' \
       "$(sanitize_token "$1")" >&2
     return 10
   fi
   # An empty SECOND half (/x/!//) gets the same fatal posture as the //
-  # empty-pattern arm above (an empty first half always begins the token
-  # with //, so that arm already caught it): an empty pattern matches
-  # every string, turning the construct into a rule whose match semantics
-  # this validator refuses to vouch for.
+  # arm above: an empty pattern matches every string.
   if [ "$_rx_dual" -eq 1 ] && [ -z "$_rx_p2" ]; then
     printf 'level=error msg="recipient restriction dual-form regexp has an empty pattern half (Postfix ends each pattern at the first unescaped /); an empty half matches every string, so the construct cannot mean what was configured; refusing to render it" entry="%s"\n' \
       "$(sanitize_token "$1")" >&2
     rm -f "$_rcpt_tmp"
     exit 2
   fi
-  # Effective flag states, per-half compile probes, then the construct-level
-  # universal-match (possibly-allow-all) guard — see each helper above for
-  # the full semantics and policy grants.
   set_regexp_flag_states
   classify_regexp_halves
   reject_universal_construct "$1"
@@ -377,60 +279,40 @@ emit_regexp_recipient_rule() {
   return "$_rcpt_status"
 }
 
-# warn_never_match_rule MSG ENTRY -- single source of the never-match warn log
-# contract plus the shared ineffective-status bookkeeping, the literal-arm
-# counterpart of warn_uncompilable_half. A shape that forgets the status
-# assignment counts as an effective rule and defeats the zero-effective-rules
-# guard, so the two live in one place.
+# Single source of the never-match warn log contract plus the shared
+# ineffective-status bookkeeping (the literal-arm counterpart of
+# warn_uncompilable_half).
 warn_never_match_rule() {
   printf 'level=warn msg="recipient restriction %s" entry="%s"\n' \
     "$1" "$(sanitize_token "$2")" >&2
   _rcpt_status=10
 }
 
-# emit_recipient_rule ENTRY — classify one RECIPIENT_RESTRICTIONS token (see
-# the file header for the three token classes) and append its rendered rule
-# via emit_rcpt_line. Shares the _rcpt_tmp contract with
-# build_recipient_filter: fatal branches remove the temp file and exit 2.
-# Returns 0 for an effective rule and 10 (ineffective) otherwise, so an
-# all-ineffective list trips the zero-effective-rules guard while a mixed list
-# boots on its valid subset. The address and domain arms return 10 for a
-# deterministic never-match shape whose line is still emitted (Postfix loads
-# it; no recipient can match it); the regexp arm has no return of its own and
-# propagates emit_regexp_recipient_rule's status only because it is that case
-# arm's LAST command - keep it last, or an uncompilable/unparseable entry
-# starts counting as effective.
-# The address shapes are order-pinned: empty local part before empty domain,
-# so a bare @ classifies as empty-local.
+# emit_recipient_rule ENTRY — classifies one RECIPIENT_RESTRICTIONS token
+# (see the file header) and appends its rendered rule via emit_rcpt_line.
+# Returns 0 for an effective rule and 10 (ineffective) otherwise. The
+# address and domain arms return 10 for a deterministic never-match shape
+# whose line is still emitted (Postfix loads it; no recipient can match);
+# the regexp arm propagates emit_regexp_recipient_rule's status as its
+# last command. Address shapes are order-pinned: empty local part before
+# empty domain, so a bare @ classifies as empty-local.
 emit_recipient_rule() {
   case "$1" in
     *[[:space:]]*)
-      # Word splitting already consumed spaces, tabs, and line feeds, so
-      # residual whitespace here is CR/FF/VT — it would render a rule no
-      # real recipient matches, silently rejecting all mail.
+      # Word splitting already consumed spaces/tabs/line feeds, so residual
+      # whitespace here is CR/FF/VT.
       printf 'level=error msg="recipient restriction contains invalid whitespace" entry="%s"\n' \
         "$(sanitize_token "$1")" >&2
       rm -f "$_rcpt_tmp"
       exit 2
       ;;
-    /*) # leading slash: regexp-family (plain, /flags, or dual-pattern form)
+    /*)
       emit_regexp_recipient_rule "$1"
       ;;
-    *@*) # full address: anchor both ends
-      # Three deterministic never-match address shapes mirror the domain
-      # arm's mechanism below (warn, still emit the rule line unchanged,
-      # return 10 so the entry is excluded from the effective-rule count).
-      # The token is split on its LAST @;
-      # classification order is PINNED — empty local part first, then
-      # empty domain, then dot-after-@ — so a bare @ (both empty)
-      # classifies as empty-local. The empty-local and empty-domain
-      # shapes were probed live on Postfix 3.11.5 (the pinned version)
-      # with strict_rfc821_envelopes = no: smtpd presents an empty local
-      # part only in quoted form, so the anchored rule never matches a
-      # recipient smtpd presents, and a domain-less recipient is rejected
-      # before the access-map lookup — re-probe on a Postfix major bump.
-      # The dot-after-@ shape needs no version caveat (DNS forbids an
-      # empty label, so no deliverable address contains @.).
+    *@*)
+      # Empty-local/empty-domain were probed live on Postfix 3.11.5 with
+      # strict_rfc821_envelopes=no; re-probe on a major bump. Dot-after-@
+      # needs no version caveat (DNS forbids an empty label).
       _rcpt_status=0
       _local="${1%@*}"
       _domain="${1##*@}"
@@ -448,16 +330,11 @@ emit_recipient_rule() {
       emit_escaped_literal_rule '/^' "$1"
       return "$_rcpt_status"
       ;;
-    *) # domain-only: anchor the @-suffix
-      # A domain can never contain a slash, so a slash-bearing token here
-      # is almost certainly a mis-typed regexp literal (e.g. `foo/bar`
-      # with its leading delimiter missing), and a leading-dot domain can never
-      # match either (no address contains @.). Both are deterministic
-      # never-match shapes: warn, still emit the rule line unchanged, but
-      # return 10 (ineffective) so the entry no longer satisfies the
-      # zero-effective-rules guard — same mechanism as the regexp arms.
-      # The entry is still accepted; only its effective-count status
-      # differs.
+    *)
+      # A domain can never contain a slash (almost certainly a mis-typed
+      # regexp literal) or start with a dot (no address contains @.).
+      # Both are deterministic never-match shapes: warned, still emitted,
+      # excluded from the effective count.
       _rcpt_status=0
       case "$1" in
         */*)
@@ -473,12 +350,11 @@ emit_recipient_rule() {
   esac
 }
 
-# build_recipient_filter — builds /etc/postfix/recipient_access from
-# RECIPIENT_RESTRICTIONS tokens and sets SMTPD_RECIPIENT_RESTRICTIONS.
-# Must be called (not subshelled) so the variable is visible to the caller.
-# The file is rendered to a mktemp file in CONF_DIR and mv'd into place
-# atomically only once the complete artifact is written, so Postfix never
-# sees a partial map and every failure path is a structured level=error.
+# Builds /etc/postfix/recipient_access from RECIPIENT_RESTRICTIONS tokens
+# and sets SMTPD_RECIPIENT_RESTRICTIONS. Must be called (not subshelled) so
+# the variable is visible to the caller. Renders to a mktemp file in
+# CONF_DIR and mv's atomically once complete, so Postfix never sees a
+# partial map.
 build_recipient_filter() {
   # shellcheck disable=SC2034 # consumed by caller after sourcing
   SMTPD_RECIPIENT_RESTRICTIONS="permit_mynetworks, reject"
@@ -488,22 +364,17 @@ build_recipient_filter() {
     _rcpt_tmp=$(create_rendered_tmp "$_rcpt_file" recipient_access) || exit 1
     _rule_count=0
     for _entry in $RECIPIENT_RESTRICTIONS; do
-      # Invoked as a condition: a bare call returning the ineffective status
-      # (10) would abort the script under set -e. The rule line is emitted
-      # either way; only effective entries advance the count.
+      # Invoked as a condition: a bare call returning status 10 would abort
+      # under set -e. The rule line is emitted either way; only effective
+      # entries advance the count.
       if emit_recipient_rule "$_entry"; then
         _rule_count=$((_rule_count + 1))
       fi
     done
-    # Refuse to proceed if a non-empty RECIPIENT_RESTRICTIONS parses to zero
-    # EFFECTIVE rules: whitespace-only value (quoting bug, empty-var
-    # expansion), every entry malformed (uncompilable halves warned above;
-    # Postfix drops each at map-open) or structurally unparseable (warned
-    # and suppressed above), or every entry a deterministic never-match domain or
-    # address shape (warned above; Postfix loads the rule but no recipient
-    # can ever match it). Without this guard the map's only live line is
-    # `/.*/ REJECT`, Postfix rejects 100% of mail, and the healthcheck
-    # still reports green.
+    # Refuse to proceed on zero EFFECTIVE rules (whitespace-only value,
+    # every entry malformed or never-matching): without this guard the
+    # map's only live line is `/.*/ REJECT`, Postfix rejects 100% of mail,
+    # and the healthcheck still reports green.
     if [ "$_rule_count" -eq 0 ]; then
       printf 'level=error msg="RECIPIENT_RESTRICTIONS is non-empty but parsed zero effective rules (whitespace only, or every entry malformed or never-matching?); refusing to reject all mail"\n' >&2
       rm -f "$_rcpt_tmp"
@@ -513,11 +384,6 @@ build_recipient_filter() {
     promote_rendered_file "$_rcpt_tmp" "$_rcpt_file" recipient_access
     # shellcheck disable=SC2034 # consumed by caller after sourcing
     SMTPD_RECIPIENT_RESTRICTIONS="check_recipient_access regexp:${_rcpt_file}, reject"
-    # Count only EFFECTIVE operator-supplied allow rules (entries Postfix
-    # will actually load AND that can match a real recipient;
-    # warned-ineffective ones are excluded), never the
-    # trailing /.*/ REJECT terminator — an internal implementation detail
-    # that would confuse operators reading Loki.
     printf 'level=info msg="recipient filtering configured" rules=%d\n' \
       "$_rule_count" >&2
   else
