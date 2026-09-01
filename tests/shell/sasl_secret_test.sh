@@ -2,23 +2,20 @@
 # write_sasl_secret() and its helpers: the upstream SASL credentials are written
 # to disk, indexed by postmap, and the plaintext removed again.
 #
-# This whole path is RUN-MODE ONLY -- `entrypoint.sh render` returns before it, so
-# tests/render-test.sh drives none of it, and a healthy image smoke test never
-# takes a failure branch inside it. What the guards here protect is the file mode
-# of an indexed map that stores the relay login AND password verbatim (a table
-# format, not a digest): postmap inherits the process umask for a file it CREATES
-# but preserves the mode of one it rewrites in place, so both the stale plaintext
-# and the stale indexed map have to be unlinked before it runs.
+# This whole path is RUN-MODE ONLY — `entrypoint.sh render` returns before it, so
+# render-test.sh drives none of it, and a healthy image smoke test never takes a
+# failure branch inside it. What the guards here protect is the file mode of an
+# indexed map that stores the relay login AND password verbatim (a table format, not
+# a digest): postmap inherits the process umask for a file it CREATES but preserves
+# the mode of one it rewrites in place, so both the stale plaintext and the stale
+# indexed map have to be unlinked before it runs.
 #
-# The two mode guards are shadowed by a later belt-and-suspenders `chmod 600`, so
-# a final-mode assertion cannot tell them apart -- it passes with either guard
-# removed. Every case below therefore asserts what postmap SAW (the stub records
-# the plaintext's mode and whether a stale map was still on disk) instead of what
-# the directory looked like afterwards.
-# Lint directives for this whole file, each against a stated guarantee rather than
-# an assumption:
+# The two mode guards are shadowed by a later belt-and-suspenders `chmod 600`, so a
+# final-mode assertion cannot tell them apart — it passes with either guard removed.
+# Every case below therefore asserts what postmap SAW (the stub records the
+# plaintext's mode and whether a stale map was still on disk).
 #   SC2015 - the assertion form `[ cond ] && ok "..." || no "..."` cannot mis-fire,
-#     because lib.sh's ok/no return 0 unconditionally by design (see their comment).
+#     because lib.sh's ok/no return 0 unconditionally by design.
 #   SC2034 - the variables set below are the INPUTS to entrypoint.sh code that is
 #     extracted and sourced at RUNTIME, so shellcheck cannot see the reads.
 # shellcheck disable=SC2015,SC2034

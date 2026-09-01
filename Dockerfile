@@ -1,52 +1,26 @@
 # check=error=true
 
-# Postfix is built from the pinned upstream source release below (the
-# vdukhovni/postfix repo is the official upstream mirror; release tags are
-# vX.Y.Z). versioning=semver keeps Renovate off the repo's ancient non-semver
-# v20010228* historical tags, which semver-coerced ordering would rank higher.
+# versioning=semver keeps Renovate off this repo's ancient non-semver v20010228*
+# tags, which semver-coerced ordering would otherwise rank highest.
 # renovate: datasource=github-tags depName=vdukhovni/postfix versioning=semver
 ARG POSTFIX_VERSION=v3.11.6
-# Renovate's github-tags datasource exposes the git sha, not the tarball
-# hash, so the repin postUpgradeTask recomputes this SHA256 from the marker
-# URL below and commits it alongside the POSTFIX_VERSION bump.
+# github-tags exposes the git sha, not the tarball hash, so the repin task
+# recomputes this from the marker URL below on a version bump.
 # repin: dep=vdukhovni/postfix url=https://high5.nl/mirrors/postfix-release/official/postfix-{version_nov}.tar.gz
 ARG POSTFIX_SHA256=b9a748705b1cab0a4afcbe42f934c82a33b342ba3229017fb508c71700078d07
 
-# ---------------------------------------------------------------------------
-# Builder stage - compiles Postfix from the pinned upstream source tarball
-# (fetched from the release mirror Alpine's own package builds use, falling
-# back to the upstream origin server on a mirror outage, SHA256-verified
-# fail-closed either way) with feature parity to Alpine 3.24's
-# main/postfix package, mirroring its APKBUILD makedefs selections: TLS
-# (openssl), Cyrus SASL client auth, PCRE2, LMDB as the default database type
-# with Berkeley DB disabled, NIS off, and
-# EAI/SMTPUTF8 on (makedefs auto-detects icu-dev). Because -DNO_DB compiles
-# Berkeley DB out, every generated map must name lmdb: explicitly and never
-# hash: or btree: — those two open FATALLY at runtime ("Berkeley DB support
-# for 'hash:...' is not available for this OS distribution"), and postconf -m
-# still lists them, so only a real map open catches the mistake. Postfix's
-# NON_BERKELEYDB_README does describe a transparent hash:->lmdb: redirect, but
-# only at migration level enable-redirect/enable-reindex, and the shipped
-# default is `disable` (`postfix non-bdb status`); its own guidance is to
-# replace hard-coded hash: with the default database type. Both generated maps
-# obey that: the sasl_passwd map and the TLS session cache are explicit lmdb:.
-# The LDAP/MySQL/PgSQL/
-# SQLite backends that Alpine splits into subpackages (never installed by
-# this image) are skipped, and map types are compiled in statically
-# (dynamicmaps=no) instead of split into plugin .so files. The postfix user
-# and postfix/postdrop groups exist here only so postfix-install can resolve
-# ownership while staging into /out; they use the same numeric IDs as the
-# runtime stage, which COPY --from preserves.
-# ---------------------------------------------------------------------------
+# -DNO_DB compiles Berkeley DB out, so every generated map must name lmdb:
+# explicitly: hash: and btree: open FATALLY at runtime ("Berkeley DB support for
+# 'hash:...' is not available for this OS distribution") while postconf -m still
+# lists them, so only a real map open catches the mistake. The transparent
+# hash:->lmdb: redirect in NON_BERKELEYDB_README applies only at migration level
+# enable-redirect/enable-reindex, and the shipped default is `disable`.
 FROM alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b AS builder
 
 SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 
-# Build deps are build-only (discarded with this stage, absent from the final
-# image), so their exact versions never reach the shipped artifact and are
-# intentionally left unpinned - they track whatever the Alpine 3.24 repo
-# serves at build time (the digest pins the base image, not the apk index).
-# Postfix itself stays version+SHA pinned above - it is the shipped artifact.
+# Build-only deps: discarded with this stage, so their versions never reach the
+# shipped artifact and stay unpinned. Postfix itself is version+SHA pinned above.
 # hadolint ignore=DL3018
 RUN apk add --no-cache \
         build-base \
@@ -67,47 +41,30 @@ RUN apk add --no-cache \
 ARG POSTFIX_VERSION
 ARG POSTFIX_SHA256
 WORKDIR /build/postfix
-# Wietse Venema's Postfix release signing key as a minimal dearmored keyring
-# (fingerprint 622C7C012254C186677469C50C0B590E80CA15A7, dsa2048/2015-10-10),
-# cross-checked against high5.nl and ftp.porcupine.org (wietse.pgp, identical
-# bytes on both) and keyserver.ubuntu.com. gpgv below verifies the release's
-# detached .gpg2 signature against it, authenticating the publisher
-# independently of the mirrors: the SHA256 pin alone is refreshed from the
-# same mirror that serves the tarball, so a compromised mirror could supply
-# both a malicious tarball and its matching hash during a version bump.
-# Refresh (only if upstream ever rotates the key - verify the new fingerprint
-# against multiple authoritative sources first):
+# Postfix release signing key (fingerprint
+# 622C7C012254C186677469C50C0B590E80CA15A7), cross-checked against high5.nl,
+# ftp.porcupine.org and keyserver.ubuntu.com. gpgv authenticates the publisher
+# independently of the mirrors: the SHA256 pin is refreshed from the same mirror
+# that serves the tarball, so a compromised mirror could supply both a malicious
+# tarball and its matching hash during a version bump.
+# Refresh only if upstream rotates the key, verifying the new fingerprint against
+# multiple authoritative sources first:
 # curl -sL https://high5.nl/mirrors/postfix-release/wietse.pgp | gpg --dearmor > postfix-release.gpg
 COPY postfix-release.gpg /usr/local/share/postfix-release.gpg
-# Fetch + verify + build + stage-install. The seds replicate Alpine's aports
-# prepare()/package() steps so the installed tree matches the apk package
-# byte-for-byte where it matters: NIS map support off, default alias database
-# under /etc/postfix, /usr/local paths dropped from master.cf, mail_version
-# resolved via the staged config dir (the builder has no /etc/postfix), and
-# postfix-files trimmed of doc/manpage/.default/LICENSE entries so `postfix
-# set-permissions` (run by the entrypoint at every boot) keeps working
-# against the slimmed install. Each sed is guarded fail-closed: a pre-sed
-# grep requires the exact expected upstream form (so source drift during a
-# version bump fails the build), and post-sed greps require the old form
-# absent and the new form present (so a sed that silently no-ops fails too).
-# The single-quoted `$CONFIG_DIRECTORY` in the postfix-install sed is meant
-# literally (postfix-install expands it at install time, not this shell), so
-# SC2016 is a false positive here.
-# The tarball is fetched from the primary mirror (high5.nl, the release
-# mirror Alpine's own package builds use) with the upstream origin server
-# (ftp.porcupine.org, plain HTTP — integrity comes from the SHA256 pin and
-# the gpgv signature check, not the transport) as fallback, so a
-# single-mirror outage cannot block builds. The detached .gpg2 signature is
-# fetched with the same primary/fallback pair and verified with gpgv against
-# the committed release keyring before the SHA check and extraction; both
-# gates are fail-closed. -O pins the output name on both attempts so a
-# partial file from a failed primary fetch is truncated by the fallback
-# instead of being saved aside. wget deliberately runs without -q so a
-# mirror/network failure keeps its diagnostic in the BuildKit log (DL3047
-# wants -q/-nv/--progress back, but busybox wget has no -nv/--progress and
-# -q is what silenced fetch failures; BuildKit hides the output on success).
-# BusyBox wget accepts but ignores --tries (no retry support), so the
-# primary/fallback mirror pair IS the retry story: one attempt per mirror.
+# The seds replicate Alpine's aports prepare()/package() steps. Each is guarded
+# fail-closed both ways: a pre-sed grep requires the exact expected upstream form
+# (so source drift during a version bump fails the build), and post-sed greps
+# require the old form absent and the new form present (so a silent no-op fails
+# too). The single-quoted `$CONFIG_DIRECTORY` is meant literally — postfix-install
+# expands it at install time, not this shell — so SC2016 is a false positive.
+# Integrity comes from the SHA256 pin and the gpgv signature, not the transport,
+# which is why the plain-HTTP fallback mirror is acceptable. -O pins the output
+# name on both attempts so a partial file from a failed primary fetch is
+# truncated by the fallback rather than saved aside. wget deliberately runs
+# without -q so a mirror failure keeps its diagnostic in the BuildKit log
+# (busybox wget has no -nv/--progress, and -q is what silenced fetch failures).
+# BusyBox wget accepts but ignores --tries, so the mirror pair IS the retry
+# story: one attempt per mirror.
 # hadolint ignore=SC2016,DL3047
 RUN { wget --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz" \
         "https://high5.nl/mirrors/postfix-release/official/postfix-${POSTFIX_VERSION#v}.tar.gz" \
@@ -181,17 +138,14 @@ RUN { wget --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz" \
        done \
     && rm -f /out/etc/postfix/*.default /out/etc/postfix/*LICENSE* \
         /out/etc/postfix/makedefs.out \
-    # Pre-sed gate for the postfix-files trim below: the sed selectors and
-    # the negative grep after it share the same spellings, so an upstream
-    # postfix-files format change could make both miss while the build still
-    # passes — and the rm above would have removed staged files that stale
-    # entries still reference, tripping `postfix set-permissions` at every
-    # boot instead of failing here. Assert each deletion selector matches an
-    # entry BEFORE mutation, proving every intended selector had an input.
-    # The shlib_directory/postfix- selector is asserted to match NOTHING:
-    # with dynamicmaps=no this build stages no postfix-*.so plugin entries,
-    # so that selector is purely defensive — if entries ever appear, fail
-    # the build so a human decides whether deleting them is still correct.
+    # Assert each deletion selector matches an entry BEFORE mutation: the sed
+    # selectors and the negative grep after them share spellings, so an upstream
+    # postfix-files format change could make both miss while the build passes —
+    # and the rm above would have removed staged files that stale entries still
+    # reference, tripping `postfix set-permissions` at every boot instead of
+    # failing here. The shlib_directory/postfix- selector is asserted to match
+    # NOTHING: dynamicmaps=no stages no plugin entries, so if any ever appear,
+    # fail the build so a human decides whether deleting them is still correct.
     && { ! grep -q -e 'shlib_directory/postfix-' /out/etc/postfix/postfix-files \
       || { printf '%s\n' 'FAIL: upstream postfix-files drift: unexpected shlib_directory/postfix- entries pre-trim (dynamicmaps=no should stage none)' >&2; exit 1; }; } \
     && for _pf_sel in \
@@ -212,13 +166,8 @@ RUN { wget --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz" \
         -e '/config_directory\/TLS_LICENSE/d' \
         -e '/config_directory\/[^/]\+\.cf\.default/d' \
         /out/etc/postfix/postfix-files \
-    # Fail-closed guard on the postfix-files trims above, matching the grep
-    # gates on the other seds: every deleted entry class must be gone (a
-    # postfix-files format change would otherwise leave stale entries for
-    # files the rm/trim removed, and `postfix set-permissions` — run by the
-    # entrypoint at every boot — would trip on them at runtime instead of
-    # build time), AND load-bearing surviving entries must still be present
-    # (proves the seds did not over-delete or hit an empty/renamed file).
+    # Every deleted entry class must be gone AND load-bearing survivors still
+    # present, so the seds can neither under- nor over-delete silently.
     && { ! grep -q \
         -e 'shlib_directory/postfix-' \
         -e 'meta_directory/makedefs\.out' \
@@ -237,42 +186,29 @@ RUN { wget --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz" \
     && chown postfix /out/var/spool/postfix/* /out/var/lib/postfix \
     && chown root:postfix /out/var/spool/postfix/pid \
     && chgrp postdrop /out/var/spool/postfix/maildrop /out/var/spool/postfix/public \
-    # Embed a minimal CycloneDX component document naming the source-built
-    # Postfix. It ships as loose staged files (no apk package), so Syft's
-    # default image catalogers record the files but no package identity; the
-    # sbom-cataloger (enabled centrally by the release pipeline via the
-    # SYFT_SELECT_CATALOGERS env in cplieger/ci docker-release.yaml; no
-    # per-repo .syft.yaml - the env var overrides the config-file key)
-    # imports this document, so the signed release SBOM carries
-    # name/version/purl/cpe and future Postfix advisories can be matched
-    # against shipped images. CPE vendor:product is postfix:postfix per the
-    # NVD CPE dictionary, e.g.
+    # Postfix ships as loose staged files (no apk package), so Syft's image
+    # catalogers record the files but no package identity; this CycloneDX
+    # component gives the signed release SBOM a name/version/purl/cpe so future
+    # Postfix advisories can be matched against shipped images. CPE
+    # vendor:product is postfix:postfix per the NVD CPE dictionary:
     # https://nvd.nist.gov/products/cpe/detail/6320E431-6032-481D-87A0-30EECE8EDFD6/
     && mkdir -p /out/usr/share/sbom \
     && printf '{"bomFormat":"CycloneDX","specVersion":"1.5","version":1,"components":[{"type":"application","name":"postfix","version":"%s","purl":"pkg:generic/postfix@%s","cpe":"cpe:2.3:a:postfix:postfix:%s:*:*:*:*:*:*:*"}]}\n' \
         "${POSTFIX_VERSION#v}" "${POSTFIX_VERSION#v}" "${POSTFIX_VERSION#v}" \
         >/out/usr/share/sbom/postfix.cdx.json
 
-# ---------------------------------------------------------------------------
-# Runtime base stage - digest-pinned base plus unpinned runtime libraries,
-# with the staged Postfix installation copied from the builder (daemons,
-# tools, shared libs, /etc/postfix defaults, spool/data skeletons; manpages
-# and readmes excluded). cyrus-sasl/cyrus-sasl-login deliberately stay
-# apk-installed: they are runtime SASL plugins, not the pinned payload.
-# ---------------------------------------------------------------------------
+# cyrus-sasl/cyrus-sasl-login deliberately stay apk-installed: they are runtime
+# SASL plugins, not the pinned payload.
 FROM alpine:3.24.1@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b AS base
 
 # apk upgrade: the pinned base ships some packages (e.g. libssl3) at a stale,
 # CVE-affected revision; upgrading floats them forward on each rebuild.
-# The users/groups recreate the apk postfix package's numeric IDs (postfix
-# 100:101, postdrop 102) so an existing spool volume keeps its ownership
-# across the apk-to-source-build conversion.
+# The numeric IDs match the apk postfix package (postfix 100:101, postdrop 102) so
+# an existing spool volume keeps its ownership across the apk-to-source conversion.
 # PKG_REFRESH busts the cache for this layer. Without it BuildKit restores the
-# layer verbatim on every rebuild, so the `apk upgrade` below floats nothing
-# forward after the first build and the image keeps shipping the packages that
-# were current then. The central release/CI/scan builds pass today's UTC date.
-# The `echo` is load-bearing: BuildKit keys a RUN on the build args it actually
-# CONSUMES, so a merely-declared ARG would change nothing.
+# layer verbatim on every rebuild, so `apk upgrade` floats nothing forward after
+# the first build. The `echo` is load-bearing: BuildKit keys a RUN on the build
+# args it actually CONSUMES, so a merely-declared ARG would change nothing.
 ARG PKG_REFRESH=static
 RUN echo "OS package refresh: ${PKG_REFRESH}" \
     && apk upgrade --no-cache \
@@ -289,10 +225,9 @@ RUN echo "OS package refresh: ${PKG_REFRESH}" \
     && addgroup -S -g 102 postdrop \
     && adduser -S -u 100 -H -h /var/spool/postfix -G postfix -g postfix postfix \
     && addgroup postfix mail \
-    # data_directory starts empty (runtime caches/locks only), so create it
-    # directly with the apk package's ownership/mode (postfix:root 700); a
-    # COPY of the empty staged dir would land root-owned 755 and postfix
-    # would warn "not owned by postfix" until set-permissions runs.
+    # data_directory starts empty, so create it with the apk package's
+    # ownership/mode (postfix:root 700); a COPY of the empty staged dir would land
+    # root-owned 755 and postfix would warn until set-permissions runs.
     && install -d -m 700 -o postfix -g root /var/lib/postfix
 
 COPY --from=builder /out/usr/libexec/postfix/ /usr/libexec/postfix/
@@ -304,31 +239,17 @@ COPY --from=builder /out/var/spool/postfix/ /var/spool/postfix/
 # Syft's sbom-cataloger can identify the source-built Postfix version.
 COPY --from=builder /out/usr/share/sbom/ /usr/share/sbom/
 
-# newaliases/mailq are hard links to sendmail in the upstream install; COPY
-# would materialize them as two extra full copies, so recreate the links the
-# way postfix-install does. Ownership/modes are baked correctly above and
-# `postfix set-permissions` (run by the entrypoint at every boot) re-asserts
-# the whole layout from /etc/postfix/postfix-files on top of any volume.
+# newaliases/mailq are hard links to sendmail in the upstream install; COPY would
+# materialize them as two extra full copies, so recreate the links the way
+# postfix-install does.
 RUN ln -f /usr/sbin/sendmail /usr/bin/newaliases \
     && ln -f /usr/sbin/sendmail /usr/bin/mailq
 
-# ---------------------------------------------------------------------------
-# Test stage - runs the golden-file config-generation tests at build time
-# (`entrypoint.sh render` needs only busybox tools), then asserts the
-# source-built Postfix: exact pinned version; embedded SBOM fragment
-# shipped, JSON-shaped, naming postfix at the same ARG-pinned version;
-# TLS, Cyrus SASL client, and
-# EAI/SMTPUTF8 compiled in; every map type the generated config relies on
-# (lmdb:, regexp:, plus cidr and pcre) present, and the rendered SASL map
-# proven OPENABLE through the exact spec the entrypoint emits (hash: and
-# btree: are listed by postconf -m but fatal to open in this -DNO_DB build);
-# setgid
-# postdrop plumbing intact after COPY; toolchain hardening (PIE, non-exec
-# stack, RELRO + BIND_NOW, stack protector) present on the shipped daemons;
-# and a boot-shaped sequence (render to
-# /etc/postfix, newaliases, `postfix check`, regexp lookup, postmap/lmdb
-# round-trip) passes. A failure fails the build.
-# ---------------------------------------------------------------------------
+# Test stage - runs the golden-file config tests and asserts the source-built
+# Postfix at build time. A failure fails the build. hash: and btree: are
+# deliberately NOT asserted present: postconf -m lists them but -DNO_DB makes
+# opening one fatal, so the rendered SASL map is instead proven OPENABLE through
+# the exact spec the entrypoint emits.
 FROM base AS test
 SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 ARG POSTFIX_VERSION
@@ -340,15 +261,12 @@ RUN ENTRYPOINT_DIR=/usr/local/bin sh /tmp/tests/render-test.sh \
       || { printf 'FAIL: mail_version %s does not match pinned %s\n' \
              "$(postconf -h mail_version)" "${POSTFIX_VERSION#v}" >&2; exit 1; }; } \
     && postconf -T compile-version >/dev/null \
-    # Embedded SBOM fragment (builder stage): must ship, be JSON-shaped,
-    # name postfix, and carry exactly one version-shaped component version
-    # equal to the ARG-pinned release - a hardcoded version would drift
-    # silently on the next Renovate bump, which is exactly the failure mode
-    # the fragment exists to prevent. BusyBox has no jq, so shape is
-    # asserted with head/tail bytes and grep; the fragment is single-line
-    # compact JSON, so the version count uses grep -o (line-counting grep -c
-    # could never see a duplicate on one line). || true keeps the pipefail
-    # shell from aborting the count assignment before the FAIL report.
+    # A hardcoded version here would drift silently on the next Renovate bump,
+    # which is exactly what the fragment exists to prevent. BusyBox has no jq, so
+    # shape is asserted with head/tail bytes and grep; the fragment is single-line
+    # compact JSON, so the version count uses grep -o (line-counting grep -c could
+    # never see a duplicate on one line). || true keeps the pipefail shell from
+    # aborting the count assignment before the FAIL report.
     && sbom=/usr/share/sbom/postfix.cdx.json \
     && { test -s "$sbom" \
       || { printf 'FAIL: embedded SBOM fragment missing or empty: %s\n' "$sbom" >&2; exit 1; }; } \
@@ -370,11 +288,9 @@ RUN ENTRYPOINT_DIR=/usr/local/bin sh /tmp/tests/render-test.sh \
     && { grep -qx cyrus /tmp/sasl-client-types \
       || { printf '%s\n' 'FAIL: cyrus missing from postconf -A (SASL client auth not compiled in)' >&2; exit 1; }; } \
     && postconf -m >/tmp/map-types \
-    # Only the types the generated config names. hash and btree are
-    # deliberately absent: postconf -m lists them, but -DNO_DB makes opening
-    # one fatal, so asserting their presence would pin a capability this image
-    # does not have (see the makedefs note at the top and the openable-map
-    # assertion below).
+    # Only the types the generated config names. hash and btree are deliberately
+    # absent: postconf -m lists them, but -DNO_DB makes opening one fatal, so
+    # asserting their presence would pin a capability this image lacks.
     && for m in cidr lmdb pcre regexp; do \
          grep -qx "$m" /tmp/map-types \
            || { printf 'FAIL: map type %s missing from postconf -m\n' "$m" >&2; exit 1; }; \
@@ -383,13 +299,10 @@ RUN ENTRYPOINT_DIR=/usr/local/bin sh /tmp/tests/render-test.sh \
       || { printf '%s\n' 'FAIL: /usr/sbin/postdrop lost its setgid bit' >&2; exit 1; }; } \
     && { test -g /usr/sbin/postqueue \
       || { printf '%s\n' 'FAIL: /usr/sbin/postqueue lost its setgid bit' >&2; exit 1; }; } \
-    # Fail-closed toolchain-hardening assertions: the daemons' PIE, non-exec
-    # stack, RELRO+BIND_NOW, and stack-protector properties currently come
-    # from Alpine toolchain defaults; asserting them here turns silent
-    # hardening regressions (a toolchain or makedefs change) into build
-    # failures. pax-utils (scanelf) is test-stage-only and never ships.
-    # If a strip or UPX step is ever added, keep the symbol check before
-    # strip and the header checks before UPX.
+    # Turns silent hardening regressions (a toolchain or makedefs change) into
+    # build failures. pax-utils (scanelf) is test-stage-only and never ships. If a
+    # strip or UPX step is ever added, keep the symbol check before strip and the
+    # header checks before UPX.
     && apk add --no-cache pax-utils \
     && for b in /usr/libexec/postfix/master /usr/libexec/postfix/smtpd \
                 /usr/libexec/postfix/smtp /usr/sbin/postmap; do \
@@ -416,15 +329,11 @@ RUN ENTRYPOINT_DIR=/usr/local/bin sh /tmp/tests/render-test.sh \
     && postmap /tmp/sasl-probe \
     && { test -f /tmp/sasl-probe.lmdb \
       || { printf '%s\n' 'FAIL: postmap did not produce /tmp/sasl-probe.lmdb (lmdb default map type broken)' >&2; exit 1; }; } \
-    # The rendered SASL map must be OPENABLE, not merely present. -DNO_DB
-    # compiles Berkeley DB out, so a hash:/btree: prefix in main.cf is fatal
-    # at the first lookup and defers every message (dsn=4.3.0) while the
-    # TCP-220 healthcheck stays green. postconf -m still LISTS hash, and
-    # postmap writes .lmdb whatever main.cf says, so neither of the checks
-    # above can see the mismatch: only opening the map spec the entrypoint
-    # actually rendered can. Renders with credentials set, then queries
-    # through that exact spec. Interior spaces in the password ride along,
-    # pinning the issue-392 credential shape end to end in the real image.
+    # The rendered SASL map must be OPENABLE, not merely present: postconf -m
+    # still LISTS hash, and postmap writes .lmdb whatever main.cf says, so neither
+    # check above can see the mismatch — only opening the spec the entrypoint
+    # actually rendered can. Interior spaces in the password ride along, pinning
+    # the issue-392 credential shape end to end in the real image.
     && env CONF_DIR=/etc/postfix RELAY_HOST=smtp.example.com \
         RELAY_LOGIN=probe@example.com RELAY_PASSWORD='aaaa bbbb cccc dddd' \
         sh /usr/local/bin/entrypoint.sh render \
@@ -447,35 +356,28 @@ RUN ENTRYPOINT_DIR=/usr/local/bin sh /tmp/tests/render-test.sh \
         /tmp/sasl-client-types /tmp/smtpd-libs \
     && touch /tmp/tests-passed
 
-# ---------------------------------------------------------------------------
-# Final stage - the runtime image. It must remain the last stage so the
-# centralized CI build-gate (which builds the default target) produces it.
-# ---------------------------------------------------------------------------
+# Must remain the last stage so the centralized CI build-gate, which builds the
+# default target, produces it.
 FROM base AS final
 
 COPY --chmod=755 validate.sh recipient-filter.sh entrypoint.sh /usr/local/bin/
 
-# Pull a 0-byte marker from the test stage so building `final` forces the
-# build-time golden tests to run and pass first. The marker is the only thing
-# carried over; the tests/ tree never reaches the runtime image.
+# A 0-byte marker from the test stage, so building `final` forces the build-time
+# golden tests to run and pass first. The tests/ tree never reaches the runtime image.
 COPY --from=test /tmp/tests-passed /tmp/tests-passed
 
 EXPOSE 25
 
-# Run as root (uid:gid 0:0) by default — Postfix master needs root to bind
-# port 25; smtpd workers drop to the unprivileged postfix user internally (setuid;
-# the stock upstream master.cf runs all services with chroot=n since Postfix 3.0).
-# This is the image default and can be overridden at run time (e.g. compose
-# `user:`) if you front the relay differently. AVD-DS-0002 is suppressed via
-# .trivyignore at the repo root; see the rationale there.
+# Postfix master needs root to bind port 25; smtpd workers drop to the
+# unprivileged postfix user internally. Overridable at run time (compose `user:`).
+# AVD-DS-0002 is suppressed via .trivyignore at the repo root.
 # hadolint ignore=DL3002
 USER 0:0
 
-# DL3025 wants JSON notation, which cannot run this: the probe pipes nc's
-# banner into grep and redirects stdin from /dev/null. Exec form supports
-# neither, and this image runs Postfix behind a shell entrypoint, so it will
-# never be shell-less -- the distroless case the rule guards does not arise
-# here.
+# DL3025 wants JSON notation, which cannot run this: the probe pipes nc's banner
+# into grep and redirects stdin from /dev/null, and exec form supports neither.
+# This image runs Postfix behind a shell entrypoint, so it will never be
+# shell-less — the distroless case the rule guards does not arise here.
 # hadolint ignore=DL3025
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=15s \
     CMD nc -w 3 127.0.0.1 25 < /dev/null | grep -q '^220 ' || exit 1
