@@ -1,19 +1,6 @@
 #!/bin/sh
-# ---------------------------------------------------------------------------
-# render-test.sh — golden-file tests for the entrypoint's config generation.
-#
-# Runs `entrypoint.sh render` (which validates env and writes main.cf +
-# recipient_access to $CONF_DIR without invoking Postfix or writing secrets)
-# against a matrix of env inputs, and diffs the generated files against the
-# committed fixtures in tests/golden/. Failure cases assert the validation
-# exit code (2). Pure POSIX sh; needs only sh, sed, diff, mktemp, awk,
-# timeout (all present in the BusyBox test stage).
-#
-# Run locally from the repo root:   sh tests/render-test.sh
-# Regenerate fixtures after an intended change:  sh tests/render-test.sh --record
-# The Docker build runs it via the `test` stage (see Dockerfile), pointing
-# ENTRYPOINT_DIR at /usr/local/bin.
-# ---------------------------------------------------------------------------
+# Golden-file tests for the entrypoint's config generation. Regenerate the
+# fixtures after an intended change with: sh tests/render-test.sh --record
 set -eu
 
 CDPATH=''
@@ -29,9 +16,8 @@ RECORD=0
 pass=0
 fail=0
 
-# check_ok NAME VAR=VAL...
-# Render must exit 0; generated main.cf (and recipient_access, if produced) are
-# normalized (the temp CONF_DIR path -> @CONF_DIR@) and compared to the golden.
+# check_ok NAME VAR=VAL... — render must exit 0; generated files are normalized
+# (the temp CONF_DIR path -> @CONF_DIR@) before the golden comparison.
 check_ok() {
   _name=$1
   shift
@@ -81,8 +67,8 @@ check_ok() {
   rm -rf "$_tmp"
 }
 
-# check_fail NAME EXPECTED_CODE VAR=VAL...
-# Render must exit with EXPECTED_CODE (config failures are 2).
+# check_fail NAME EXPECTED_CODE VAR=VAL... — render must exit EXPECTED_CODE
+# (config failures are 2).
 check_fail() {
   _name=$1
   _want=$2
@@ -104,10 +90,8 @@ check_fail() {
   rm -rf "$_tmp"
 }
 
-# check_log NAME EXPECTED_CODE LOG_SNIPPET VAR=VAL...
-# Render must exit EXPECTED_CODE AND its stderr must contain LOG_SNIPPET
-# (fixed string). check_ok/check_fail discard stderr, so structured
-# level=error/warn log contracts are pinned through this helper instead.
+# check_log NAME EXPECTED_CODE LOG_SNIPPET VAR=VAL... — check_ok/check_fail discard
+# stderr, so structured log contracts are pinned through this helper instead.
 check_log() {
   _name=$1
   _want=$2

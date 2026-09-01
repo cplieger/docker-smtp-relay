@@ -1,6 +1,6 @@
 #!/bin/sh
-# Input-validation helpers for smtp-relay entrypoint.sh, sourced at runtime.
-# Canonical copy; there is no shared validation library.
+# Input-validation helpers for entrypoint.sh, sourced at runtime. Canonical
+# copy; there is no shared validation library.
 
 # Strips one trailing newline (env files and `$(...)` often carry one) before
 # checking for embedded newlines, the actual config-injection vector.
@@ -19,30 +19,13 @@ validate_no_newlines() {
   fi
 }
 
-# Rejection logs never interpolate the raw rejected token (a value can carry
-# a double quote and break logfmt parsing) except through sanitize_token,
-# which bounds and escapes it for per-entry diagnosability.
+# Rejection logs never interpolate the raw rejected token (a value can carry a
+# double quote and break logfmt parsing) except through sanitize_token.
 #
-# Validation policy — which inputs are fatal, and which are the operator's:
-#   Tier 1 (always fatal, security): injection into rendered config, the
-#     open-relay CIDR rejection, credential exposure (SASL field format;
-#     cleartext TLS with SASL), and any input that silently turns a
-#     configured restriction into allow-all (the empty/slash-leading
-#     recipient regex class and the universal-match guard in
-#     recipient-filter.sh). Closed set; new entries require the same.
-#   Tier 2 (fatal, documented contract): value combinations the app's own
-#     contract says can never function — the implicit-TLS 465
-#     mandatory-level gate, never-matching-shape escalations
-#     (whitespace-only/leading-zero/multi-slash network entries,
-#     leading-bracket RELAY_HOST defects), the fingerprint-family
-#     both-or-neither and format checks, and the RECIPIENT_RESTRICTIONS
-#     size bounds (rendering spawns external processes per rule before
-#     Postfix binds port 25; hard-coded, no override — this image exposes
-#     no access-map/policy-service setting for a larger allowlist).
-#   Tier 3 (operator's responsibility): syntactically-plausible but
-#     semantically-wrong values beyond those tiers. Existing warn arms are
-#     final; no new shape arm without a Tier 1/2 justification — Postfix's
-#     own runtime diagnostics are the source of truth beyond this point.
+# The fatal/warn tier policy lives in the docker-smtp-relay steering doc. The
+# invariant here: existing warn arms are final, and no NEW fatal shape arm lands
+# without a Tier 1 (security) or Tier 2 (documented never-works) justification.
+# Beyond that, Postfix's own runtime diagnostics are the source of truth.
 
 # Strips logfmt delimiters and control bytes, bounds to 512 bytes with a
 # literal [truncated] marker, so a rejected value logs as one parseable field.
@@ -82,11 +65,9 @@ validate_no_metacharacters() {
 }
 
 # validate_range VAR VALUE MIN MAX. Precondition: VALUE already passed
-# validate_numeric — entrypoint.sh's spec table orders `num` before `range=`
-# on every row so a non-numeric or >18-digit value can never reach the `if`
-# below, which would otherwise swallow "Illegal number" as in-range; the raw
-# value="%s" interpolation is exempt from the no-raw-token rule for the same
-# reason (guaranteed digits-only here).
+# validate_numeric — the spec table orders `num` before `range=` on every row, or
+# the `if` below would swallow test(1)'s "Illegal number" as in-range. The raw
+# value="%s" interpolation is exempt from the no-raw-token rule for that reason.
 validate_range() {
   if [ "$2" -lt "$3" ] || [ "$2" -gt "$4" ]; then
     printf 'level=error msg="env var out of range" var=%s value="%s" min=%s max=%s\n' "$1" "$2" "$3" "$4" >&2
@@ -94,25 +75,22 @@ validate_range() {
   fi
 }
 
-# RECIPIENT_RESTRICTIONS size bounds. Hard-coded with no env override: this
-# image renders smtpd_recipient_restrictions itself with no access-map or
-# policy-service setting, so a deployment needing more needs its own Postfix.
-# Rendering spawns an external process per rule (sed/awk/grep) before Postfix
-# binds port 25 with no deadline; measured ~1.4ms/plain rule, ~4.3ms/regexp
-# rule on this host. 256 rules is ~1.1s, an order of magnitude inside the 15s
-# healthcheck start-period.
+# Hard-coded with no env override: this image renders
+# smtpd_recipient_restrictions itself with no access-map or policy-service
+# setting, so a deployment needing more needs its own Postfix. Rendering spawns
+# an external process per rule before Postfix binds port 25 with no deadline;
+# measured ~1.4ms/plain and ~4.3ms/regexp rule, so 256 rules is ~1.1s, an order
+# of magnitude inside the 15s healthcheck start-period.
 readonly MAX_RECIPIENT_RULES=256
 # The byte bound, against a shape a rule count cannot see (one pathological
 # giant token). Wide enough to admit the ~8 KiB regexp construct
 # tests/render-test.sh pins.
 readonly MAX_RECIPIENT_BYTES=16384
 
-# validate_recipient_rule_count VAR VALUE — upper bound on rule count
-# (MAX_RECIPIENT_RULES). Counts whitespace-separated tokens the renderer
-# itself will iterate (default-IFS splitting collapses whitespace runs, so
-# padding cannot inflate the count); `set -f` premise matches
-# validate_no_open_relay's loop. Upper bound only: a zero-token value is the
-# zero-effective-rules guard's case (recipient-filter.sh), not this one's.
+# validate_recipient_rule_count VAR VALUE — upper bound only; a zero-token value
+# is the zero-effective-rules guard's case (recipient-filter.sh), not this one's.
+# Counts the whitespace-separated tokens the renderer itself iterates, so padding
+# cannot inflate the count.
 validate_recipient_rule_count() {
   _rr_var=$1
   # shellcheck disable=SC2086
@@ -124,13 +102,10 @@ validate_recipient_rule_count() {
   fi
 }
 
-# validate_recipient_byte_length VAR VALUE — upper bound on the whole
-# value's byte length (MAX_RECIPIENT_BYTES). Ordered after the rule count in
-# the spec table: a list breaking both is a rule-count problem, the
-# actionable message.
-# wc -c, not ${#VALUE}: BusyBox ash and dash disagree on what ${#} means for
-# a multibyte value, and the bound is about bytes the renderer/Postfix
-# handle.
+# validate_recipient_byte_length VAR VALUE — ordered AFTER the rule count in the
+# spec table: a list breaking both is a rule-count problem, the actionable
+# message. wc -c, not ${#VALUE}: BusyBox ash and dash disagree on what ${#} means
+# for a multibyte value, and the bound is about bytes.
 validate_recipient_byte_length() {
   # A value that field-splits to zero tokens belongs to the
   # zero-effective-rules guard in recipient-filter.sh, not here.

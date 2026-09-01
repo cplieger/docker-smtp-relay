@@ -3,35 +3,21 @@
 #
 # This filename is the contract: cplieger/ci's shell-ci.yaml runs
 # `tests/shell/run.sh` when it exists, and skips otherwise, so a repo opts into
-# shell unit testing by committing this file. Keep the name.
+# shell unit testing by committing this file. Keep the name. The hook tests -f and
+# invokes it through `bash`, so the exec bit is not load-bearing.
 #
-# The hook tests -f and invokes this through `bash`, so the exec bit is not
-# load-bearing (it was committed 100644 once, which under an -x check would have
-# skipped the whole suite silently and still reported CI green). The bit is set
-# anyway, for anyone running it directly.
-#
-# WHAT THIS REPO'S SUITE COVERS. This file is repo-owned (lib.sh and
-# harness_test.sh beside it are synced from cplieger/ci), so the per-repo scope
-# rationale lives here.
-#
-# Not the image smoke test, and not
-# tests/render-test.sh: the shipped shell is THREE files — entrypoint.sh (PID 1,
-# modes run|render) plus the sourced validate.sh and recipient-filter.sh — and the
-# existing harnesses reach only part of it. tests/image-smoke.sh builds an image
-# and asserts it boots, so it never takes a failure branch at all.
-# tests/render-test.sh drives `entrypoint.sh render` across an env matrix, which
-# covers config generation but stops at two hard edges: render mode returns before
-# the whole run-mode half (the SASL secret write and its postmap, the upstream TCP
-# probe, the queue-depth telemetry, the startup timeout accounting), and a
-# process-level harness sees only ONE exit 2 for a validator that refuses on seven
-# distinct arms. These tests take the other side of both edges: the run-mode
-# helpers no render ever executes, and the individual refusal — its message, not
-# just its exit code — that a matrix collapses.
+# SCOPE. The shipped shell is THREE files — entrypoint.sh (PID 1, modes
+# run|render) plus the sourced validate.sh and recipient-filter.sh — and the other
+# two harnesses reach only part of it. image-smoke.sh asserts the image boots, so
+# it never takes a failure branch. render-test.sh drives `entrypoint.sh render`,
+# which stops at two hard edges: render mode returns before the whole run-mode half
+# (the SASL secret write and its postmap, the upstream TCP probe, queue telemetry,
+# startup timeout accounting), and a process-level harness sees only ONE exit 2 for
+# a validator that refuses on seven distinct arms. These tests take the other side
+# of both edges.
 #
 # Each *_test.sh is a separate process, so one test's stubs, traps and shell
-# options cannot leak into another's. All of them run even when an early one
-# fails: a boot path's tests are cheap, and a maintainer wants the whole picture
-# from one CI log rather than one failure at a time.
+# options cannot leak into another's. All run even when an early one fails.
 set -u
 
 cd -- "$(dirname -- "$0")" || exit 1

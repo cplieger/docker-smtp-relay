@@ -1,26 +1,21 @@
 #!/usr/bin/env bash
 # validate_no_open_relay() and the two per-family CIDR validators it delegates to.
 #
-# WHY THIS IS NOT tests/render-test.sh's ground: render-test drives the whole
-# entrypoint as a process and can only observe ONE exit code. This validator refuses
-# on thirteen distinct arms, so at process granularity twelve of them are
-# indistinguishable from the thirteenth -- and the render matrix exercises four
-# (0.0.0.0/0, a trailing dot, a leading-zero octet, an IPv6 multi-slash entry).
-# Every case below asserts the SPECIFIC refusal message, which is what makes the
-# arms separable: a mutant that deletes one guard has to fail the case that names it
-# and only that case, even when another arm downstream still refuses the same input
-# with a different message.
+# NOT render-test.sh's ground: render-test drives the whole entrypoint as a process
+# and can only observe ONE exit code, while this validator refuses on thirteen
+# distinct arms. Every case below asserts the SPECIFIC refusal message, which is
+# what makes the arms separable: a mutant that deletes one guard has to fail the
+# case that names it and only that case, even when another arm downstream still
+# refuses the same input with a different message.
 #
 # The stakes are the app's central security property. ACCEPTED_NETWORKS becomes
 # Postfix's mynetworks, so a too-broad entry is an open relay, and a malformed one
-# Postfix drops at runtime with a maillog warning -- meaning the operator's LAN is
-# silently excluded while validation and the healthcheck both stay green.
+# Postfix drops at runtime with a maillog warning — the operator's LAN is silently
+# excluded while validation and the healthcheck both stay green.
 #
 # Nothing is stubbed: these validators are pure shell over their arguments.
-# Lint directives for this whole file, each against a stated guarantee rather than
-# an assumption:
 #   SC2015 - the assertion form `[ cond ] && ok "..." || no "..."` cannot mis-fire,
-#     because lib.sh's ok/no return 0 unconditionally by design (see their comment).
+#     because lib.sh's ok/no return 0 unconditionally by design.
 # shellcheck disable=SC2015
 set -u
 
@@ -75,9 +70,8 @@ refuses() {
 
 # --- 1. THE OPEN-RELAY GUARDS ----------------------------------------------------
 # /7 is the only shape that isolates the minimum-prefix guard: 0.0.0.0/0 is caught
-# by the literal arm before it (so it still refuses with that guard gone) and /8 is
-# legal. Without this guard mynetworks accepts mail from far beyond the operator's
-# LAN, which is the open-relay class the whole validator exists to prevent.
+# by the literal arm before it and /8 is legal. Without this guard mynetworks
+# accepts mail from far beyond the operator's LAN.
 refuses '10.0.0.0/7' 'msg="network CIDR too broad (min /8)"' \
   "a /7 CIDR is refused as too broad even though it is otherwise well-formed"
 
@@ -88,8 +82,7 @@ refuses '::/0' 'msg="network list contains open-relay CIDR"' \
 
 # --- 2. the prefix must exist, be numeric, and be comparable ---------------------
 # A bare address renders as a host entry Postfix reads differently from the intended
-# network; the prefix is what the /8 guard above measures, so its absence has to be
-# refused before that guard can mean anything.
+# network, and the prefix is what the /8 guard above measures.
 refuses '192.168.1.5' 'msg="network entry missing CIDR prefix"' \
   "a network entry with no /prefix is refused"
 
