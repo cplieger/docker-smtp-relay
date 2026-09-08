@@ -3,11 +3,11 @@
 # versioning=semver keeps Renovate off this repo's ancient non-semver v20010228*
 # tags, which semver-coerced ordering would otherwise rank highest.
 # renovate: datasource=github-tags depName=vdukhovni/postfix versioning=semver
-ARG POSTFIX_VERSION=v3.11.6
+ARG POSTFIX_VERSION=v3.11.7
 # github-tags exposes the git sha, not the tarball hash, so the repin task
 # recomputes this from the marker URL below on a version bump.
 # repin: dep=vdukhovni/postfix url=https://high5.nl/mirrors/postfix-release/official/postfix-{version_nov}.tar.gz
-ARG POSTFIX_SHA256=b9a748705b1cab0a4afcbe42f934c82a33b342ba3229017fb508c71700078d07
+ARG POSTFIX_SHA256=a2f3242345753448072177fae83c322a403c9263696996406201145dab8e8625
 
 # -DNO_DB compiles Berkeley DB out, so every generated map must name lmdb:
 # explicitly: hash: and btree: open FATALLY at runtime ("Berkeley DB support for
