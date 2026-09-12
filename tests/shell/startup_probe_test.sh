@@ -10,6 +10,12 @@
 #     nc as a flag -- argument injection into a process the entrypoint spawns as
 #     root. The guard skips the probe instead, because the probe is fail-soft by
 #     contract.
+#   - Nothing is written to the socket. An SMTP command sent before the greeting is
+#     a pipelining violation the upstream logs against us (measured against Postfix
+#     3.11.7: "improper command pipelining after CONNECT" on the peer, and a
+#     554 5.5.0 synchronization error back), so the probe hands nc an EOF stdin and
+#     reads the banner instead. Neither the connect verdict nor the fail-soft
+#     contract can see the difference, which is why it needs an assertion.
 #   - The timeout arithmetic. STARTUP_PROBE_TIMEOUT is range-validated 1-10, and
 #     `08` satisfies that range while being an octal parse error inside $((...)).
 #     Unnormalised, the pipeline fails and the fail-soft wrapper logs a FALSE
@@ -19,8 +25,9 @@
 #     assertion rather than a smoke test.
 #
 # Only `timeout` is stubbed -- it is the process boundary, and it is also the
-# cheapest place to observe the argv nc would have been handed. probe_relay_tcp
-# itself stays real, so an empty argv record proves the probe never ran at all.
+# cheapest place to observe the argv nc would have been handed and the bytes it
+# would have written. probe_relay_tcp itself stays real, so an empty argv record
+# proves the probe never ran at all.
 # Lint directives for this whole file, each against a stated guarantee rather than
 # an assumption:
 #   SC2015 - the assertion form `[ cond ] && ok "..." || no "..."` cannot mis-fire,
@@ -50,10 +57,13 @@ load_function probe_upstream
 
 # The one stub: `timeout` is where the probe leaves the shell. Recording its whole
 # argv captures both halves of the contract -- the outer budget and the nc command
-# line the host lands in. Defined once here for the in-process cases and once in
-# the child template below for the survival cases.
+# line the host lands in -- and draining its stdin captures what nc would have
+# written to the upstream. Defined once here for the in-process cases and once in
+# the child template below for the survival cases (which assert on argv only, so
+# the child template needs no stdin sink).
 timeout() {
   printf '%s\n' "$*" >>"$ARGV"
+  cat >>"$STDIN_REC"
   return "$STUB_TIMEOUT_STATUS"
 }
 
@@ -84,8 +94,17 @@ setup() {
   ARGV="$CASE/argv"
   LOG="$CASE/log"
   SURVIVED="$CASE/survived"
+  # What the stub drains out of the probe's stdin, and the bait it drains when the
+  # shipped redirect is gone: the in-process cases below run with stdin on $FEED, so
+  # a probe that inherits the caller's stdin records the sentinel instead of nothing,
+  # and a probe that pipes a command records that. Both are finite, so a missing
+  # redirect fails the case rather than blocking the stub's read.
+  STDIN_REC="$CASE/stdin"
+  FEED="$CASE/feed"
   : >"$ARGV"
   : >"$LOG"
+  : >"$STDIN_REC"
+  printf 'SENTINEL-CALLER-STDIN\n' >"$FEED"
   STUB_TIMEOUT_STATUS=0
   STARTUP_PROBE=true
   STARTUP_PROBE_TIMEOUT=5
@@ -124,7 +143,7 @@ argv_line() {
 setup
 STARTUP_PROBE_TIMEOUT=08
 _rc=0
-probe_relay_tcp smtp.example.com 587 || _rc=$?
+probe_relay_tcp smtp.example.com 587 <"$FEED" || _rc=$?
 [ "$_rc" -eq 0 ] && [ "$(argv_line)" = '-k 2 10 nc -w 8 smtp.example.com 587' ] \
   && ok "STARTUP_PROBE_TIMEOUT=08 probes with -w 8 under a 10s budget instead of failing arithmetic" \
   || no "leading-zero timeout normalised" "rc=$_rc, argv: $(argv_line)"
@@ -134,12 +153,25 @@ probe_relay_tcp smtp.example.com 587 || _rc=$?
 # than leading zeroes, where case 1 is what fails if it strips none.
 setup
 STARTUP_PROBE_TIMEOUT=5
-probe_relay_tcp smtp.example.com 587
+probe_relay_tcp smtp.example.com 587 <"$FEED"
 [ "$(argv_line)" = '-k 2 7 nc -w 5 smtp.example.com 587' ] \
   && ok "a plain timeout keeps its value, with the documented +2s margin on the outer budget" \
   || no "plain timeout preserved" "argv: $(argv_line)"
 
-# --- 3. THE INJECTION CASE: an option-shaped relay host never reaches nc's argv --
+# --- 3. THE PROTOCOL CASE: the probe writes nothing to the upstream --------------
+# A TCP-reachability probe has no reason to speak, and speaking first is a
+# violation: an SMTP command before the greeting is pipelining, which the peer
+# records against this relay's address on every boot. The probe must therefore hand
+# nc an EOF stdin, not a command. This case fails on both regressions -- a piped
+# command records the command, and a dropped redirect records the caller's stdin
+# (which the setup above deliberately makes non-empty).
+setup
+probe_relay_tcp smtp.example.com 587 <"$FEED"
+[ ! -s "$STDIN_REC" ] \
+  && ok "the probe sends no bytes to the upstream, so it commits no command-pipelining violation" \
+  || no "probe sends nothing" "nc would have written: $(cat "$STDIN_REC")"
+
+# --- 4. THE INJECTION CASE: an option-shaped relay host never reaches nc's argv --
 # Bait the unguarded code would take: '-e/bin/sh' is dash-leading AND free of
 # whitespace, ;, &, |, backtick and $, so validate_no_metacharacters passes it. nc
 # builds that accept -e execute the named program, and this probe runs as root.
@@ -152,7 +184,7 @@ probe_under_set_e
   && ok "a dash-leading RELAY_HOST is skipped with a warn and never enters nc's argv" \
   || no "option-shaped host skipped" "rc=$_rc, argv: $(argv_line)"
 
-# --- 4. brackets are stripped before the host reaches nc ------------------------
+# --- 5. brackets are stripped before the host reaches nc ------------------------
 # A bare IPv6 RELAY_HOST is bracketed for Postfix's relayhost, but nc needs the
 # address itself; a bracketed argv would make every IPv6 upstream look unreachable.
 setup
@@ -163,7 +195,7 @@ probe_under_set_e
   && ok "an IPv6 RELAY_HOST is unbracketed for nc while the log keeps the relayhost form" \
   || no "bracket stripping" "argv: $(argv_line)"
 
-# --- 5. STARTUP_PROBE=false disables the probe entirely -------------------------
+# --- 6. STARTUP_PROBE=false disables the probe entirely -------------------------
 # Disabling the probe is a deliberate operator choice, so it is announced once
 # rather than silently: an image that never probes and never says so is
 # indistinguishable in the logs from one whose probe was skipped by a bug.
@@ -175,7 +207,7 @@ probe_under_set_e
   && ok "STARTUP_PROBE=false spawns nothing and logs the disabled state once" \
   || no "probe disabled" "rc=$_rc, argv: $(argv_line), log: $(cat "$LOG")"
 
-# --- 6. an unreachable upstream is FAIL-SOFT ------------------------------------
+# --- 7. an unreachable upstream is FAIL-SOFT ------------------------------------
 # The relay may legitimately be down at boot; mail queues. If this returned
 # non-zero the caller's `set -e` would kill PID 1 before Postfix ever started, so
 # the assertion is that the caller survived, not merely that a warning was logged.
@@ -187,8 +219,8 @@ probe_under_set_e
   && ok "an unreachable upstream warns and returns 0, so startup continues to Postfix" \
   || no "probe is fail-soft" "rc=$_rc, survived=$([ -f "$SURVIVED" ] && echo yes || echo no), log: $(cat "$LOG")"
 
-# --- 7. ... and a reachable one is reported as reachable ------------------------
-# Paired with case 6: an inverted test would turn every healthy boot into a false
+# --- 8. ... and a reachable one is reported as reachable ------------------------
+# Paired with case 7: an inverted test would turn every healthy boot into a false
 # "unreachable" warning, which is the failure mode operators would learn to ignore.
 setup
 STUB_TIMEOUT_STATUS=0
