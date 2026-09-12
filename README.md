@@ -344,7 +344,7 @@ All dependencies are updated automatically via [Renovate](https://github.com/ren
 | postfix | [GitHub](https://github.com/vdukhovni/postfix) |
 | cyrus-sasl / cyrus-sasl-login | [Alpine](https://pkgs.alpinelinux.org/packages?name=cyrus-sasl) |
 
-The entrypoint pins `compatibility_level = 3.6`, so new Postfix defaults are adopted deliberately with version upgrades rather than silently at runtime.
+The entrypoint pins `compatibility_level` to the shipped Postfix major.minor (`3.11`), so Postfix runs on that release's own defaults and logs no backwards-compatibility reminders at startup.
 
 ## Credits
 

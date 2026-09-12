@@ -152,7 +152,10 @@ no second copy to keep in sync.
 - **Startup probe is fail-soft.** `probe_upstream` is a plain TCP check and
   must never block startup: a failure logs a warning and returns 0 so mail
   still queues. Keep it bounded by `STARTUP_PROBE_TIMEOUT` (under the
-  healthcheck `--start-period`) and never make it attempt SASL AUTH.
+  healthcheck `--start-period`) and never make it attempt SASL AUTH. It also
+  writes nothing to the socket: an SMTP command sent before the greeting is
+  command pipelining, which the upstream records against this relay on every
+  boot, so `nc` gets an EOF stdin rather than a `QUIT`.
 - Match the existing 2-space indentation in the shell scripts
   (`shfmt -i 2 -ci`, matching `.editorconfig`).
 
