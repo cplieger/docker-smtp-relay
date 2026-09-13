@@ -336,7 +336,7 @@ TCP/25 to trusted source subnets.
 
 ## Dependencies
 
-All dependencies are updated automatically via [Renovate](https://github.com/renovatebot/renovate). The base image is pinned by SHA digest. Postfix is built from the upstream source tarball, pinned by version + SHA-256, with its detached release signature verified at build using `gpgv` against the upstream signing key committed in this repo. The build has feature parity with the Alpine `postfix` package (TLS, Cyrus SASL client auth, PCRE2, LMDB as the default map type, SMTPUTF8), and the image embeds a CycloneDX component for the source-built Postfix so release SBOMs carry its name and version. The SASL runtime packages and shared libraries are installed unpinned so they track the digest-pinned base userland.
+All dependencies are updated automatically via [Renovate](https://github.com/renovatebot/renovate). The base image is pinned by SHA digest. Postfix is built from the upstream source tarball, pinned by version + SHA-256, with its detached release signature verified at build using `gpgv` against the upstream signing key committed in this repo. The build has feature parity with the Alpine `postfix` package (TLS, Cyrus SASL client auth, PCRE2, LMDB as the default map type, SMTPUTF8), and the image embeds a CycloneDX component for the source-built Postfix so release SBOMs carry its name, version, the mirror URL the build fetches from and the SHA-256 it verifies. The SASL runtime packages and shared libraries are installed unpinned so they track the digest-pinned base userland.
 
 | Dependency | Source |
 | --- | --- |
