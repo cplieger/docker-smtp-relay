@@ -192,9 +192,15 @@ RUN { wget --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz" \
     # Postfix advisories can be matched against shipped images. CPE
     # vendor:product is postfix:postfix per the NVD CPE dictionary:
     # https://nvd.nist.gov/products/cpe/detail/6320E431-6032-481D-87A0-30EECE8EDFD6/
+    # download_url names the PRIMARY mirror even where the fetch above fell back
+    # to the second one: the SHA256 pin and the gpgv signature are
+    # mirror-independent, so the checksum is what ties the purl to the bytes
+    # whichever mirror served them.
     && mkdir -p /out/usr/share/sbom \
-    && printf '{"bomFormat":"CycloneDX","specVersion":"1.5","version":1,"components":[{"type":"application","name":"postfix","version":"%s","purl":"pkg:generic/postfix@%s","cpe":"cpe:2.3:a:postfix:postfix:%s:*:*:*:*:*:*:*"}]}\n' \
-        "${POSTFIX_VERSION#v}" "${POSTFIX_VERSION#v}" "${POSTFIX_VERSION#v}" \
+    && printf '{"bomFormat":"CycloneDX","specVersion":"1.5","version":1,"components":[{"type":"application","name":"postfix","version":"%s","purl":"pkg:generic/postfix@%s?download_url=%s&checksum=sha256:%s","cpe":"cpe:2.3:a:postfix:postfix:%s:*:*:*:*:*:*:*"}]}\n' \
+        "${POSTFIX_VERSION#v}" "${POSTFIX_VERSION#v}" \
+        "https://high5.nl/mirrors/postfix-release/official/postfix-${POSTFIX_VERSION#v}.tar.gz" \
+        "$POSTFIX_SHA256" "${POSTFIX_VERSION#v}" \
         >/out/usr/share/sbom/postfix.cdx.json
 
 # cyrus-sasl/cyrus-sasl-login deliberately stay apk-installed: they are runtime
