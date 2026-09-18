@@ -1,9 +1,6 @@
 # docker-smtp-relay
 
-[![Image Size](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cplieger/docker-smtp-relay/badges/size.json)](https://github.com/cplieger/docker-smtp-relay/pkgs/container/docker-smtp-relay)
-![Platforms](https://img.shields.io/badge/platforms-amd64%20%7C%20arm64-blue)
-![base: Alpine](https://img.shields.io/badge/base-Alpine-0D597F?logo=alpinelinux)
-[![SBOM](https://img.shields.io/badge/SBOM-SPDX-1D4ED8)](https://github.com/cplieger/docker-smtp-relay/releases)
+[![Image Size](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cplieger/docker-smtp-relay/badges/size.json)](https://github.com/cplieger/docker-smtp-relay/pkgs/container/docker-smtp-relay) ![Platforms](https://img.shields.io/badge/platforms-amd64%20%7C%20arm64-blue) ![base: Alpine](https://img.shields.io/badge/base-Alpine-0D597F?logo=alpinelinux) [![SBOM](https://img.shields.io/badge/SBOM-SPDX-1D4ED8)](https://github.com/cplieger/docker-smtp-relay/releases)
 
 <!-- hub-overview BEGIN -->
 Point all your services at one container for outbound email; no per-app SMTP setup needed.
