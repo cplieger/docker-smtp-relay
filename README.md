@@ -213,7 +213,7 @@ way.
 
 ## Healthcheck
 
-The healthcheck verifies Postfix is accepting connections on port 25 and returning a valid SMTP 220 banner, confirming the relay process is running, the port is bound, and Postfix is ready to accept mail. Postfix runs as PID 1 via `start-fg`; if it dies, the container exits immediately and Docker's `restart: unless-stopped` brings it back.
+The healthcheck verifies Postfix is accepting connections on port 25 and returning a valid SMTP 220 banner, confirming the relay process is running, the port is bound, and Postfix is ready to accept mail. Postfix runs as PID 1 via `start-fg`; if it dies, the container exits immediately and Docker's `restart: unless-stopped` brings it back. A Postfix that cannot start at all (a failed config check, a port it cannot bind) ends the boot with a non-zero exit and the reason in the log, never as an idle container waiting on a healthcheck. A restart changes nothing about queued mail: the queue lives on the `/var/spool/postfix` volume, so deferred deliveries resume their retry schedule once Postfix is back.
 
 ## Observability
 
