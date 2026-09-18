@@ -15,7 +15,7 @@ ARG POSTFIX_SHA256=a2f3242345753448072177fae83c322a403c9263696996406201145dab8e8
 # lists them, so only a real map open catches the mistake. The transparent
 # hash:->lmdb: redirect in NON_BERKELEYDB_README applies only at migration level
 # enable-redirect/enable-reindex, and the shipped default is `disable`.
-FROM alpine:3.24.2@sha256:31b6477333eb8257db9e5d7c3a7264fd0467928756f0bbcc27d35bea5d28cdbd AS builder
+FROM alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS builder
 
 SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 
@@ -205,7 +205,7 @@ RUN { wget --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz" \
 
 # cyrus-sasl/cyrus-sasl-login deliberately stay apk-installed: they are runtime
 # SASL plugins, not the pinned payload.
-FROM alpine:3.24.2@sha256:31b6477333eb8257db9e5d7c3a7264fd0467928756f0bbcc27d35bea5d28cdbd AS base
+FROM alpine:3.24.2@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS base
 
 # apk upgrade: the pinned base ships some packages (e.g. libssl3) at a stale,
 # CVE-affected revision; upgrading floats them forward on each rebuild.
