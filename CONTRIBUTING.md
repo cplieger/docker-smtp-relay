@@ -99,6 +99,31 @@ validation library. When you change a validator, update the golden fixtures
 under `tests/` that exercise it and re-run `sh tests/render-test.sh` -- there is
 no second copy to keep in sync.
 
+Two more suites cover what the render tests cannot reach. The shell unit tests
+in `tests/shell/` source the entrypoint's functions directly and exercise the
+run-mode half (the SASL secret write, the upstream probe, queue telemetry,
+startup timeouts) plus each validator's refusal message; `lib.sh` and
+`harness_test.sh` there are synced from `cplieger/ci`, so edit only the
+`*_test.sh` files. Run them from the repo root:
+
+```sh
+bash tests/shell/run.sh
+```
+
+The image smoke test runs the assembled image for real. `tests/image-smoke.sh`
+is the shared harness, also synced from `cplieger/ci` and never edited here;
+`tests/image-smoke.conf` beside it holds this image's assertions. It boots the
+image, waits for the `220` healthcheck, relays a message through a sink
+container built from the same image that demands STARTTLS and SASL AUTH, then
+runs two negative controls: a boot with `master(8)` hidden must exit non-zero
+naming the failed Postfix check, and a relay whose SASL plugins are hidden must
+report the message deferred rather than sent. It needs Docker and `openssl` on
+the host, and CI runs it on every push:
+
+```sh
+sh tests/image-smoke.sh smtp-relay:dev
+```
+
 ## Conventions and gotchas
 
 - **`set -euf`.** The `-f` (disable globbing) is load-bearing:
