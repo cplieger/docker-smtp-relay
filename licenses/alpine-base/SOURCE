@@ -1,0 +1,1 @@
+https://gitlab.alpinelinux.org/alpine/aports/-/tree/3.24-stable/main/alpine-base version 3.24.2 (no license file published upstream; APKBUILD declares MIT) The aport is a metapackage plus /etc/alpine-release and /etc/os-release; it holds only an APKBUILD, and neither it nor the aports repository root publishes a license file. No source file carries a license header.

@@ -1,0 +1,1 @@
+https://git.openldap.org/openldap/openldap/-/archive/LMDB_0.9.35/openldap-LMDB_0.9.35.tar.gz version 0.9.35 (openldap-LMDB_0.9.35/libraries/liblmdb/LICENSE and COPYRIGHT) The APKBUILD builds only libraries/liblmdb out of the OpenLDAP tree, so the license files travel from that directory: LICENSE is the OpenLDAP Public License 2.8 and COPYRIGHT is the notice it requires.

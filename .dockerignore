@@ -4,5 +4,10 @@
 !entrypoint.sh
 !validate.sh
 !recipient-filter.sh
+!LICENSE
+!NOTICE
+!scripts/collect-licenses.sh
+!licenses/
+!licenses/**
 !tests/
 !tests/**

@@ -1,0 +1,1 @@
+https://ftp.gnu.org/gnu/readline/readline-8.3.tar.gz version 8.3 (readline-8.3/COPYING) The package version is 8.3.3: the APKBUILD builds the readline-8.3 tarball plus upstream patchlevels 001 to 003, none of which touches COPYING.

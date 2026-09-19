@@ -359,3 +359,7 @@ This project was built with AI-assisted tooling using [Claude](https://claude.co
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).
+
+The image carries the license text of every bundled component under `/usr/share/licenses/`. The Alpine packages in the image ship no license file upstream, so their license texts are kept under `licenses/` in this repository and copied in.
+
+It packages Postfix, which you may take under either the Eclipse Public License 2.0 or the IBM Public License 1.0, and Postfix's own `LICENSE` and `TLS_LICENSE` ship under `/usr/share/licenses/postfix/`. The exact version is pinned in the Dockerfile as `POSTFIX_VERSION`, with `POSTFIX_SHA256` pinning the tarball the build fetches from `https://high5.nl/mirrors/postfix-release/official/postfix-<version>.tar.gz` (the fallback mirror serves the same path on `http://ftp.porcupine.org`); the upstream source repository is [vdukhovni/postfix](https://github.com/vdukhovni/postfix). The build applies no patch files, and the only changes it makes to that source are the `sed` commands in the Dockerfile, so this repository at the commit that produced an image plus the pinned tarball are the complete build recipe for it.
