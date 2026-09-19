@@ -1,0 +1,1 @@
+https://github.com/ThomasDickey/ncurses-snapshots/archive/refs/tags/v6_6_20260516.tar.gz version 6.6_p20260516 (ncurses-snapshots-6_6_20260516/COPYING) The APKBUILD's own source URL, https://invisible-mirror.net/archives/ncurses/current/ncurses-6.6-20260516.tgz, answers 404 once a snapshot leaves current/, so the text comes from the maintainer's snapshot mirror at that exact tag.

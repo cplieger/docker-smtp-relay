@@ -1,0 +1,1 @@
+https://gitlab.alpinelinux.org/alpine/aports/-/tree/3.24-stable/main/alpine-keys version 2.6 (no license file published upstream; APKBUILD declares MIT) The aport ships the Alpine package-signing RSA public keys; neither the aport directory nor the aports repository root publishes a license file, and a .rsa.pub key file carries no header.

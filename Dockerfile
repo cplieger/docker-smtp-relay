@@ -136,8 +136,7 @@ RUN { wget --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz" \
     && for i in postdrop postqueue; do \
          chgrp postdrop "/out/usr/sbin/$i" && chmod g+s "/out/usr/sbin/$i"; \
        done \
-    && rm -f /out/etc/postfix/*.default /out/etc/postfix/*LICENSE* \
-        /out/etc/postfix/makedefs.out \
+    && rm -f /out/etc/postfix/*.default /out/etc/postfix/makedefs.out \
     # Assert each deletion selector matches an entry BEFORE mutation: the sed
     # selectors and the negative grep after them share spellings, so an upstream
     # postfix-files format change could make both miss while the build passes —
@@ -151,8 +150,6 @@ RUN { wget --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz" \
     && for _pf_sel in \
         'meta_directory/makedefs\.out' \
         'manpage_directory' \
-        'config_directory/LICENSE' \
-        'config_directory/TLS_LICENSE' \
         'config_directory/[^/]\+\.cf\.default' \
       ; do \
         grep -q -e "$_pf_sel" /out/etc/postfix/postfix-files \
@@ -162,8 +159,6 @@ RUN { wget --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz" \
         -e '/shlib_directory\/postfix-/d' \
         -e '/meta_directory\/makedefs.out/d' \
         -e '/manpage_directory/d' \
-        -e '/config_directory\/LICENSE/d' \
-        -e '/config_directory\/TLS_LICENSE/d' \
         -e '/config_directory\/[^/]\+\.cf\.default/d' \
         /out/etc/postfix/postfix-files \
     # Every deleted entry class must be gone AND load-bearing survivors still
@@ -172,11 +167,9 @@ RUN { wget --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz" \
         -e 'shlib_directory/postfix-' \
         -e 'meta_directory/makedefs\.out' \
         -e 'manpage_directory' \
-        -e 'config_directory/LICENSE' \
-        -e 'config_directory/TLS_LICENSE' \
         -e 'config_directory/[^/]\+\.cf\.default' \
         /out/etc/postfix/postfix-files \
-      || { printf '%s\n' 'FAIL: trimmed doc/manpage/.default/LICENSE entries remain in /out/etc/postfix/postfix-files' >&2; exit 1; }; } \
+      || { printf '%s\n' 'FAIL: trimmed doc/manpage/.default entries remain in /out/etc/postfix/postfix-files' >&2; exit 1; }; } \
     && { grep -q '^\$config_directory/main\.cf:' /out/etc/postfix/postfix-files \
       || { printf '%s\n' 'FAIL: $config_directory/main.cf entry missing from /out/etc/postfix/postfix-files' >&2; exit 1; }; } \
     && { grep -q '^\$daemon_directory/smtpd:' /out/etc/postfix/postfix-files \
@@ -186,6 +179,8 @@ RUN { wget --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz" \
     && chown postfix /out/var/spool/postfix/* /out/var/lib/postfix \
     && chown root:postfix /out/var/spool/postfix/pid \
     && chgrp postdrop /out/var/spool/postfix/maildrop /out/var/spool/postfix/public \
+    && mkdir -p /out/usr/share/licenses/postfix \
+    && cp LICENSE TLS_LICENSE /out/usr/share/licenses/postfix/ \
     # Postfix ships as loose staged files (no apk package), so Syft's image
     # catalogers record the files but no package identity; this CycloneDX
     # component gives the signed release SBOM a name/version/purl/cpe so future
@@ -202,6 +197,8 @@ RUN { wget --timeout=30 -O "postfix-${POSTFIX_VERSION#v}.tar.gz" \
         "https://high5.nl/mirrors/postfix-release/official/postfix-${POSTFIX_VERSION#v}.tar.gz" \
         "$POSTFIX_SHA256" "${POSTFIX_VERSION#v}" \
         >/out/usr/share/sbom/postfix.cdx.json
+
+COPY LICENSE NOTICE /out/usr/share/licenses/smtp-relay/
 
 # cyrus-sasl/cyrus-sasl-login deliberately stay apk-installed: they are runtime
 # SASL plugins, not the pinned payload.
@@ -244,6 +241,8 @@ COPY --from=builder /out/var/spool/postfix/ /var/spool/postfix/
 # The embedded Postfix SBOM component (see the builder stage) rides along so
 # Syft's sbom-cataloger can identify the source-built Postfix version.
 COPY --from=builder /out/usr/share/sbom/ /usr/share/sbom/
+COPY --from=builder /out/usr/share/licenses/ /usr/share/licenses/
+COPY licenses/ /usr/share/licenses/
 
 # newaliases/mailq are hard links to sendmail in the upstream install; COPY would
 # materialize them as two extra full copies, so recreate the links the way

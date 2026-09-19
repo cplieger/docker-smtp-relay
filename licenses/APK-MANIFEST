@@ -1,0 +1,37 @@
+alpine-baselayout 3.7.2-r1 GPL-2.0-only alpine-baselayout
+alpine-baselayout-data 3.7.2-r1 GPL-2.0-only alpine-baselayout
+alpine-keys 2.6-r0 MIT alpine-keys
+alpine-release 3.24.2-r0 MIT alpine-base
+apk-tools 3.0.8-r0 GPL-2.0-only apk-tools
+busybox 1.37.0-r31 GPL-2.0-only busybox
+busybox-binsh 1.37.0-r31 GPL-2.0-only busybox
+ca-certificates 20260909-r0 MPL-2.0 AND MIT ca-certificates
+ca-certificates-bundle 20260909-r0 MPL-2.0 AND MIT ca-certificates
+cyrus-sasl 2.1.28-r9 BSD-3-Clause-Attribution AND BSD-4-Clause cyrus-sasl
+cyrus-sasl-login 2.1.28-r9 BSD-3-Clause-Attribution AND BSD-4-Clause cyrus-sasl
+gdbm 1.26-r0 GPL-3.0-or-later gdbm
+heimdal-libs 7.8.0-r5 BSD-3-Clause heimdal
+icu-data-en 78.1-r0 ICU icu
+icu-libs 78.1-r0 ICU icu
+krb5-conf 1.0-r2 MIT krb5-conf
+libapk 3.0.8-r0 GPL-2.0-only apk-tools
+libcom_err 1.47.4-r0 GPL-2.0-or-later AND LGPL-2.0-or-later AND BSD-3-Clause AND MIT e2fsprogs
+libcrypto3 3.5.8-r0 Apache-2.0 openssl
+libgcc 15.2.0-r5 GPL-2.0-or-later AND LGPL-2.1-or-later gcc
+libncursesw 6.6_p20260516-r0 X11 ncurses
+libsasl 2.1.28-r9 BSD-3-Clause-Attribution AND BSD-4-Clause cyrus-sasl
+libssl3 3.5.8-r0 Apache-2.0 openssl
+libstdc++ 15.2.0-r5 GPL-2.0-or-later AND LGPL-2.1-or-later gcc
+linux-pam 1.7.1-r2 BSD-3-Clause linux-pam
+lmdb 0.9.35-r0 OLDAP-2.8 lmdb
+musl 1.2.6-r2 MIT musl
+musl-utils 1.2.6-r2 MIT AND BSD-2-Clause AND GPL-2.0-or-later musl
+ncurses-terminfo-base 6.6_p20260516-r0 X11 ncurses
+pcre2 10.48-r0 BSD-3-Clause pcre2
+readline 8.3.3-r1 GPL-3.0-or-later readline
+scanelf 1.3.9-r1 GPL-2.0-only pax-utils
+skalibs-libs 2.15.0.0-r0 ISC skalibs
+sqlite-libs 3.53.4-r0 blessing sqlite
+ssl_client 1.37.0-r31 GPL-2.0-only busybox
+utmps-libs 0.1.3.3-r0 ISC utmps
+zlib 1.3.2-r0 Zlib zlib
