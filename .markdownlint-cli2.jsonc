@@ -1,0 +1,4 @@
+{
+  // Verbatim upstream license texts are not prose this repository owns; they are never reformatted.
+  "ignores": ["licenses/**"]
+}
