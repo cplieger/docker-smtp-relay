@@ -2,3 +2,6 @@
 **/.app-review/
 **/.judgement/
 **/.steering-maintenance/
+
+# Agent workflow scratch
+.agents/
