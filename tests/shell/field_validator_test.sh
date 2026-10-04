@@ -217,7 +217,7 @@ refuses 'msg="env var contains invalid characters" var=SMTP_HOSTNAME' \
 # --- 6. validate_tls_level: the documented allowlist -----------------------------
 # The eight levels are spelled out here on purpose rather than iterated from
 # TLS_LEVELS: iterating the constant would assert only that it equals itself, while
-# this pins the code against the documented contract in README/steering.
+# this pins the code against the level table in docs/configuration.md.
 _lvl_bad=''
 for _lvl in none may encrypt dane dane-only fingerprint verify secure; do
   run validate_tls_level "$_lvl"
