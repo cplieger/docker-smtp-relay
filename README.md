@@ -127,7 +127,7 @@ docker-smtp-relay packages [Postfix](https://github.com/vdukhovni/postfix), whic
 
 ## Contributing
 
-Issues and pull requests are welcome. Please open an issue first for larger changes, and see [CONTRIBUTING.md](CONTRIBUTING.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Disclaimer
 
