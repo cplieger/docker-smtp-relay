@@ -99,7 +99,7 @@ Keep port 25 on your own network. The example publishes it on every host interfa
 
 Your apps send to the relay without encryption unless you set `SMTPD_TLS_CERT_FILE` and `SMTPD_TLS_KEY_FILE`. When the relay uses TLS to your provider, it uses TLS 1.2 or later. With a login set, the TLS levels `none` and `may` are refused.
 
-The relay keeps the provider login in a file only root can read. Settings are environment variables only, so anyone who can run `docker inspect` on the host can read the password. The container starts as root to listen on port 25, and Postfix runs its workers as an unprivileged user. [Security](docs/security.md) covers hardening, every check the relay runs and what the image contains.
+The relay keeps the provider login in a file only root can read. Settings are environment variables only, so anyone who can run `docker inspect` on the host can read the password. The container starts as root to listen on port 25, and Postfix runs its workers as an unprivileged user. [Security](docs/hardening.md) covers hardening, every check the relay runs and what the image contains.
 
 ## Troubleshooting
 
@@ -117,7 +117,7 @@ The relay has no metrics endpoint. Postfix logs every delivery attempt to the co
 ## Documentation
 
 - [Configuration](docs/configuration.md) lists every setting, with the TLS levels, inbound TLS and recipient filtering.
-- [Security](docs/security.md) covers network exposure, the hardened compose settings and what the image contains.
+- [Security](docs/hardening.md) covers network exposure, the hardened compose settings and what the image contains.
 - [Monitoring and alerts](docs/monitoring.md) explains the log lines and the alert rule.
 - [How docker-smtp-relay works](docs/how-it-works.md) describes the design and what happens at each start.
 
