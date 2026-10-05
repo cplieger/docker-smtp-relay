@@ -44,12 +44,12 @@ groups:
           summary: "smtp-relay is failing to deliver mail upstream"
           description: >
             More than 10 delivery attempts logged status=deferred or
-            status=bounced in the last 15m, so outbound mail is not reaching the
-            upstream relay. Common causes are a bad RELAY_LOGIN / RELAY_PASSWORD,
-            a wrong SMTP_TLS_SECURITY_LEVEL, or the provider rejecting or
-            throttling the sender. Mail keeps queuing and retrying meanwhile.
-            Check the delivery lines for the SMTP reply text.
+            status=bounced in 15m, so outbound mail is not reaching the upstream
+            relay. Mail keeps queuing and retrying. Check the delivery lines for
+            the SMTP reply text.
 ```
+
+When `SmtpRelayDeliveryFailing` fires, the common causes are a bad `RELAY_LOGIN` or `RELAY_PASSWORD`, a wrong `SMTP_TLS_SECURITY_LEVEL`, or your provider rejecting or throttling the sender.
 
 The rule ships with no stall alert, because delivery lines appear only when mail is sent and quiet periods are normal. The healthcheck covers a stopped Postfix. To alert on mail the relay refuses itself, add `NOQUEUE` to the pattern.
 
