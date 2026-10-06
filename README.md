@@ -42,8 +42,8 @@ services:
 
     environment:
       RELAY_HOST: "email-smtp.us-east-1.amazonaws.com"  # your provider's SMTP server name
-      RELAY_LOGIN: "your-relay-login"  # the SMTP username your provider gives you
-      RELAY_PASSWORD: "your-relay-password"  # for Gmail, paste the App Password with its spaces
+      RELAY_LOGIN: "${RELAY_LOGIN:?set RELAY_LOGIN in .env}"  # the SMTP username your provider gives you
+      RELAY_PASSWORD: "${RELAY_PASSWORD:?set RELAY_PASSWORD in .env}"  # for Gmail, the App Password with its spaces
       RELAY_PORT: "587"  # 587 = STARTTLS, 465 = implicit TLS
       # For apps in other containers, add their Docker network range from "docker network inspect".
       ACCEPTED_NETWORKS: "192.168.0.0/16"  # the networks your apps send mail from
@@ -57,10 +57,18 @@ services:
 ```
 
 1. Replace `/path/to/smtp-relay-spool` with a folder on your host, such as `/opt/smtp-relay/spool`.
-2. Set `RELAY_HOST`, `RELAY_LOGIN` and `RELAY_PASSWORD` to your provider's SMTP server and login. For Gmail, use `smtp.gmail.com` and paste the App Password as Google shows it, spaces included.
-3. Set `ACCEPTED_NETWORKS` to the networks your apps send from. For apps in other containers, add their Docker network's range, which `docker network inspect <network>` shows.
-4. Run `docker compose up -d`.
-5. In each app's email settings, enter your Docker host's address as the SMTP server, port 25, with no login and no encryption.
+2. Set `RELAY_HOST` to your provider's SMTP server. For Gmail, use `smtp.gmail.com`.
+3. Put your provider login in a file named `.env` beside `compose.yaml`. For Gmail, paste the App Password inside the quotes as Google shows it, spaces included.
+
+   ```sh
+   RELAY_LOGIN=your-relay-login
+   RELAY_PASSWORD='your-relay-password'
+   ```
+
+   Run `chmod 600 .env` so only you can read it. Compose refuses to start while either value is missing.
+4. Set `ACCEPTED_NETWORKS` to the networks your apps send from. For apps in other containers, add their Docker network's range, which `docker network inspect <network>` shows.
+5. Run `docker compose up -d`.
+6. In each app's email settings, enter your Docker host's address as the SMTP server, port 25, with no login and no encryption.
 
 Run `docker logs smtp-relay`. You should see `msg="starting smtp-relay"`. If you see `upstream relay unreachable at startup`, check `RELAY_HOST`, `RELAY_PORT` and your firewall. Mail queues until the relay reaches your provider.
 
@@ -71,7 +79,7 @@ Every setting is an environment variable, checked each time the container starts
 | Variable | Description | Default |
 | --- | --- | --- |
 | `RELAY_HOST` | Your provider's SMTP server, such as `email-smtp.us-east-1.amazonaws.com`, `smtp.gmail.com` or `smtp.mailgun.org` | required |
-| `RELAY_LOGIN` | SMTP username. Set it together with `RELAY_PASSWORD`, or leave both unset for a server that needs no login | _(unset)_ |
+| `RELAY_LOGIN` | SMTP username. Set it together with `RELAY_PASSWORD`, or leave both unset, and delete both lines from the compose file, for a server that needs no login | _(unset)_ |
 | `RELAY_PASSWORD` | SMTP password. Spaces inside it are kept, so a Gmail App Password works as issued. It must not end with whitespace | _(unset)_ |
 | `RELAY_PORT` | `587` for STARTTLS, `465` for implicit TLS. With `465`, `SMTP_TLS_SECURITY_LEVEL` cannot be `none`, `may` or `dane` | `587` |
 | `SMTP_TLS_SECURITY_LEVEL` | How the relay checks your provider's certificate. `secure` checks the chain and the host name | `secure` |
