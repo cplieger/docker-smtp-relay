@@ -26,7 +26,7 @@ Recipient entries are escaped before they become Postfix patterns, and the recip
 
 With a login set, the relay writes it to a file under a umask of 077, turns it into the Postfix lookup table that only root can read, and deletes the plaintext file. A trap removes the plaintext file too when a step fails or the container is stopped during that step. The relay then removes the login and password from its own environment before Postfix starts.
 
-The values stay in the container's configuration, so anyone who can run `docker inspect` on the host can read them. The relay reads settings from environment variables only, with no file-based secret form.
+The values stay in the container's configuration, so anyone who can run `docker inspect` on the host can read them. The relay reads settings from environment variables only, with no file-based secret form. Keep the password in an `.env` file that only you can read, as [Secrets in files](https://github.com/cplieger/docs/blob/main/docs/hardening.md#secrets-in-files) shows.
 
 ## TLS
 
@@ -34,7 +34,7 @@ When the relay uses TLS to your provider, it uses TLS 1.2 or later with the `hig
 
 ## Privileges and the hardened compose settings
 
-The container runs as root, because Postfix's master process needs root to listen on port 25. Postfix runs its workers as the unprivileged `postfix` user. Add this to the service to stop a compromised process from gaining privileges through a setuid program:
+The container runs as root, because Postfix's master process needs root to listen on port 25. Postfix runs its workers as the unprivileged `postfix` user. Add this to the service, as [No new privileges](https://github.com/cplieger/docs/blob/main/docs/hardening.md#no-new-privileges) explains:
 
 ```yaml
     security_opt:
