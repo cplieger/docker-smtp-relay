@@ -7,8 +7,8 @@ services:
 
     environment:
       RELAY_HOST: "email-smtp.us-east-1.amazonaws.com"  # your provider's SMTP server name
-      RELAY_LOGIN: "your-relay-login"  # the SMTP username your provider gives you
-      RELAY_PASSWORD: "your-relay-password"  # for Gmail, paste the App Password with its spaces
+      RELAY_LOGIN: "${RELAY_LOGIN:?set RELAY_LOGIN in .env}"  # the SMTP username your provider gives you
+      RELAY_PASSWORD: "${RELAY_PASSWORD:?set RELAY_PASSWORD in .env}"  # for Gmail, the App Password with its spaces
       RELAY_PORT: "587"  # 587 = STARTTLS, 465 = implicit TLS
       # For apps in other containers, add their Docker network range from "docker network inspect".
       ACCEPTED_NETWORKS: "192.168.0.0/16"  # the networks your apps send mail from

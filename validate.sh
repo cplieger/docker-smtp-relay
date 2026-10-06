@@ -22,8 +22,7 @@ validate_no_newlines() {
 # Rejection logs never interpolate the raw rejected token (a value can carry a
 # double quote and break logfmt parsing) except through sanitize_token.
 #
-# The fatal/warn tier policy lives in the docker-smtp-relay steering doc. The
-# invariant here: existing warn arms are final, and no NEW fatal shape arm lands
+# Invariant: existing warn arms are final, and no NEW fatal shape arm lands
 # without a Tier 1 (security) or Tier 2 (documented never-works) justification.
 # Beyond that, Postfix's own runtime diagnostics are the source of truth.
 

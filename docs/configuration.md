@@ -11,7 +11,7 @@ Every setting is an environment variable in the compose file. The container read
 | Variable | Description | Default |
 | --- | --- | --- |
 | `RELAY_HOST` | Your provider's SMTP server, such as `email-smtp.us-east-1.amazonaws.com`, `smtp.gmail.com` or `smtp.mailgun.org` | required |
-| `RELAY_LOGIN` | SMTP username. Set it together with `RELAY_PASSWORD`, or leave both unset for a server that needs no login | _(unset)_ |
+| `RELAY_LOGIN` | SMTP username. Set it together with `RELAY_PASSWORD`, or leave both unset, and delete both lines from the compose file, for a server that needs no login | _(unset)_ |
 | `RELAY_PASSWORD` | SMTP password. Spaces inside it are kept, so a Gmail App Password works as issued. It must not end with whitespace | _(unset)_ |
 | `RELAY_PORT` | `587` for STARTTLS, `465` for implicit TLS. With `465`, `SMTP_TLS_SECURITY_LEVEL` cannot be `none`, `may` or `dane` | `587` |
 | `SMTP_TLS_SECURITY_LEVEL` | How the relay checks your provider's certificate. `secure` checks the chain and the host name | `secure` |
@@ -41,7 +41,7 @@ The image ships no time zone data and logs in UTC, so `TZ` has no effect.
 ## Provider examples
 
 - For AWS SES, set `RELAY_HOST` to your region's SMTP endpoint, such as `email-smtp.us-east-1.amazonaws.com`, and the login to the SMTP credentials SES gives you.
-- For Gmail, set `RELAY_HOST` to `smtp.gmail.com` and `RELAY_PASSWORD` to an App Password. Paste it as Google shows it, spaces included, such as `"wxyz abcd efgh aabb"`, and keep the quotes in the compose file.
+- For Gmail, set `RELAY_HOST` to `smtp.gmail.com` and `RELAY_PASSWORD` to an App Password. Paste it as Google shows it, spaces included, such as `'wxyz abcd efgh aabb'`, and keep the quotes in `.env`.
 - Mailgun, SendGrid and any other provider that accepts SMTP with STARTTLS on port 587 work with the defaults.
 
 The relay passes each message's sender address through unchanged. Set each app's sender to an address your provider accepts for your account.
