@@ -1,30 +1,13 @@
 #!/usr/bin/env bash
 # The rendered main.cf's compatibility_level against the Postfix version the
-# Dockerfile pins: a cross-file invariant nothing else in the repo checks.
-#
-# Postfix prints a three-line backwards-compatibility reminder from postfix(1), and
-# only from postfix(1), whenever compatibility_level is below the release's own
-# level -- whether or not any parameter is actually taking an old default. The
-# entrypoint makes three such calls per boot (check, set-permissions, start-fg;
-# newaliases and postmap are other binaries and print nothing), and each line lands
-# twice because postfix(1) pushes a stderr output handler and a postlog one. At
-# level 3.6 on the pinned 3.11.7 that is 18 lines, none of which names a setting,
-# because this image renders every value the level would otherwise default.
-#
-# WHY HERE and not in the other two harnesses. render-test.sh runs in the
-# Dockerfile `test` stage, which copies the entrypoint and the goldens but not the
-# Dockerfile, so it cannot read the pin; the image smoke test runs the assembled
-# image, where the level is already baked. This suite runs on the host with the
-# whole repo on disk, which is what a both-sides read needs (shell.md, "assert
-# cross-file invariants the deploy never checks").
-#
-# On a Postfix major.minor bump this case fails until the rendered level is
-# raised, which is the deliberate-adoption step: read COMPATIBILITY_README for the
-# new level's gated defaults before raising it.
-# Lint directives for this whole file, each against a stated guarantee rather than
-# an assumption:
-#   SC2015 - the assertion form `[ cond ] && ok "..." || no "..."` cannot mis-fire,
-#     because lib.sh's ok/no return 0 unconditionally by design (see their comment).
+# Dockerfile pins: below the release's own level postfix(1) logs a reminder on
+# every call, though this image renders every value the level would default.
+# Only this host-side suite can read both files: render-test.sh's stage lacks the
+# Dockerfile and the image smoke runs with the level already baked. On a Postfix
+# major.minor bump this fails until the level is raised: read COMPATIBILITY_README
+# for the new level's gated defaults first.
+
+# SC2015: `[ cond ] && ok || no` cannot mis-fire, lib.sh's ok/no always return 0.
 # shellcheck disable=SC2015
 set -u
 
