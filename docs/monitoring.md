@@ -26,7 +26,7 @@ A rising count of `status=deferred` lines with no `status=sent` lines means that
 
 ## Alerting
 
-Ship the container's logs to Loki and evaluate this rule with [Loki's ruler](https://grafana.com/docs/loki/latest/alert/). Grafana Alloy's Docker log discovery ships them with no extra configuration. Firing alerts go through your Alertmanager like any Prometheus alert.
+This rule is for Loki's ruler. Save the block below as a file in Loki's rules folder, as [Loading an app's alert rules](https://github.com/cplieger/docs/blob/main/docs/monitoring.md#loading-an-apps-alert-rules) shows.
 
 ```yaml
 groups:
