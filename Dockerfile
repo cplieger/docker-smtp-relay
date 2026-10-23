@@ -15,7 +15,7 @@ ARG POSTFIX_SHA256=a2f3242345753448072177fae83c322a403c9263696996406201145dab8e8
 # lists them, so only a real map open catches the mistake. The transparent
 # hash:->lmdb: redirect in NON_BERKELEYDB_README applies only at migration level
 # enable-redirect/enable-reindex, and the shipped default is `disable`.
-FROM alpine:3.24.3@sha256:b3413572228e34bd1c9245f5565e6cd127005655e8a7899aef33d8e83255c9e6 AS builder
+FROM alpine:3.24.3@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a AS builder
 
 SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 
@@ -202,7 +202,7 @@ COPY LICENSE NOTICE /out/usr/share/licenses/smtp-relay/
 
 # cyrus-sasl/cyrus-sasl-login deliberately stay apk-installed: they are runtime
 # SASL plugins, not the pinned payload.
-FROM alpine:3.24.3@sha256:b3413572228e34bd1c9245f5565e6cd127005655e8a7899aef33d8e83255c9e6 AS base
+FROM alpine:3.24.3@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a AS base
 
 # apk upgrade: the pinned base ships some packages (e.g. libssl3) at a stale,
 # CVE-affected revision; upgrading floats them forward on each rebuild.
