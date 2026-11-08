@@ -26,9 +26,9 @@ groups:
           description: >-
             For 5m the METRICS_PORT scrape failed or reported
             smtp_relay_queue_scrape_ok 0. A failed scrape means the
-            container, Postfix or the network path is down; scrape_ok 0
-            means the queue reader stopped or cannot read the queue. The
-            container log says which.
+            container, Postfix or network path is down; scrape_ok 0 means
+            the reader stopped or cannot read the queue; the container log
+            names a read failure.
       - alert: SmtpRelayMailStuck
         expr: smtp_relay_queue_oldest_message_age_seconds{queue="deferred"} > 1800
         for: 5m
