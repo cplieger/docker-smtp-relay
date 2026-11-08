@@ -9,6 +9,7 @@ MODE="${1:-run}"
 readonly CONF_DIR
 readonly SASL_PASSWD_FILE="${CONF_DIR}/sasl_passwd"
 readonly MAIN_CF="${CONF_DIR}/main.cf"
+readonly MASTER_CF="${CONF_DIR}/master.cf"
 
 # Exit codes: 2 = config-validation failure, 1 = runtime failure.
 
@@ -50,6 +51,7 @@ apply_defaults() {
   : "${SMTP_HOSTNAME:=smtp-relay.local}"
   : "${STARTUP_PROBE:=true}"
   : "${STARTUP_PROBE_TIMEOUT:=5}"
+  : "${METRICS_PORT:=}"
 }
 
 # Exit-2 precedence is load-bearing across these helpers: the RELAY_HOST
@@ -98,6 +100,7 @@ MESSAGE_SIZE_LIMIT:nl,num,range=1:104857600
 SMTP_HOSTNAME:nl,meta
 STARTUP_PROBE:nl
 STARTUP_PROBE_TIMEOUT:nl,num,range=1:10
+METRICS_PORT:nl
 "
   for _spec in $_spec_table; do
     _var="${_spec%%:*}"
@@ -306,12 +309,25 @@ validate_runtime_config() {
   validate_smtpd_tls_files
 }
 
+# Unset or empty is off. The spec table cannot range-check an optional value,
+# so the number checks run here, only when it is set.
+validate_metrics_config() {
+  [ -n "$METRICS_PORT" ] || return 0
+  validate_numeric METRICS_PORT "$METRICS_PORT" || exit 2
+  validate_range METRICS_PORT "$METRICS_PORT" 1 65535 || exit 2
+  if [ "$METRICS_PORT" -eq 25 ]; then
+    printf 'level=error msg="METRICS_PORT must differ from 25, the port Postfix receives mail on" var=METRICS_PORT\n' >&2
+    exit 2
+  fi
+}
+
 validate_config() {
   validate_declared_fields
   validate_sasl_config
   validate_fingerprint_config
   validate_smtpd_tls_config
   validate_relay_acceptance
+  validate_metrics_config
   validate_runtime_config
 
   printf 'level=info msg="input validation passed"\n' >&2
@@ -518,6 +534,59 @@ maillog_file = /dev/stdout
 EOF
 }
 
+# Leading zeroes are stripped (validate_range's min of 1 keeps the value
+# non-empty), because Postfix would not read 09154 as the port the user set.
+compute_metrics_port() {
+  METRICS_PORT_VALUE=$METRICS_PORT
+  while [ "${METRICS_PORT_VALUE#0}" != "$METRICS_PORT_VALUE" ]; do
+    METRICS_PORT_VALUE=${METRICS_PORT_VALUE#0}
+  done
+}
+
+readonly METRICS_BLOCK_BEGIN='# BEGIN METRICS_PORT service, rendered by entrypoint.sh at each start'
+readonly METRICS_BLOCK_END='# END METRICS_PORT service'
+
+# spawn(8) runs the responder once per connection and kills it after
+# command_time_limit. It refuses root and the mail owner, hence the user.
+emit_metrics_service() {
+  cat <<EOF
+${METRICS_BLOCK_BEGIN}
+${METRICS_PORT_VALUE} inet n n n - 4 spawn
+  -o command_time_limit=10s
+  user=smtp-metrics argv=/usr/local/bin/metrics-responder.sh /usr/share/smtp-relay/build-info
+${METRICS_BLOCK_END}
+EOF
+}
+
+emit_master_cf_body() {
+  awk -v begin="$METRICS_BLOCK_BEGIN" -v end="$METRICS_BLOCK_END" '
+    $0 == begin { skip = 1 }
+    !skip { print }
+    $0 == end { skip = 0 }
+  ' "$MASTER_CF" || return 1
+  [ -z "$METRICS_PORT_VALUE" ] || emit_metrics_service
+}
+
+# The block between the markers is dropped first, so a restart, which renders
+# over the file the previous start left, never lists the service twice. With
+# METRICS_PORT unset and no block, master.cf is not rewritten at all.
+render_master_cf() {
+  if [ -z "$METRICS_PORT_VALUE" ] && ! grep -qxF -- "$METRICS_BLOCK_BEGIN" "$MASTER_CF" 2>/dev/null; then
+    return 0
+  fi
+  if [ ! -f "$MASTER_CF" ]; then
+    printf 'level=error msg="master.cf not found; cannot add the METRICS_PORT service" path="%s"\n' "$(sanitize_token "$MASTER_CF")" >&2
+    exit 1
+  fi
+  _master_tmp=$(create_rendered_tmp "$MASTER_CF" master.cf) || exit 1
+  if ! emit_master_cf_body >"$_master_tmp"; then
+    printf 'level=error msg="failed to write master.cf (disk full or read-only?)" path="%s"\n' "$(sanitize_token "$_master_tmp")" >&2
+    rm -f "$_master_tmp"
+    exit 1
+  fi
+  promote_rendered_file "$_master_tmp" "$MASTER_CF" master.cf
+}
+
 # Renders to a mktemp file in CONF_DIR and mv's atomically, so a write failure
 # (ENOSPC, EROFS) never leaves a partial main.cf for Postfix to read.
 render_main_cf() {
@@ -539,9 +608,11 @@ render_config() {
   compute_smtpd_tls_lines
   compute_mynetworks
   compute_sasl_state
+  compute_metrics_port
   # Called, not subshelled, so SMTPD_RECIPIENT_RESTRICTIONS reaches render_main_cf.
   build_recipient_filter
   render_main_cf
+  render_master_cf
 }
 
 # As PID 1 under Alpine ash a trapped signal is only handled once the current

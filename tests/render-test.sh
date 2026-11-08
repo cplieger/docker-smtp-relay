@@ -8,6 +8,7 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "$0")" && pwd)
 ENTRYPOINT_DIR="${ENTRYPOINT_DIR:-$(dirname -- "$SCRIPT_DIR")}"
 ENTRYPOINT="$ENTRYPOINT_DIR/entrypoint.sh"
 GOLDEN_DIR="$SCRIPT_DIR/golden"
+MASTER_SEED="$GOLDEN_DIR/master.cf.seed"
 
 RECORD=0
 [ "${1:-}" = "--record" ] && RECORD=1
@@ -17,11 +18,14 @@ pass=0
 fail=0
 
 # check_ok NAME VAR=VAL... — render must exit 0; generated files are normalized
-# (the temp CONF_DIR path -> @CONF_DIR@) before the golden comparison.
+# (the temp CONF_DIR path -> @CONF_DIR@) before the golden comparison. master.cf
+# starts as MASTER_SEED: a case with no NAME.master.cf golden must leave it
+# byte-identical, which is what a render without METRICS_PORT promises.
 check_ok() {
   _name=$1
   shift
   _tmp=$(mktemp -d)
+  cp "$MASTER_SEED" "$_tmp/master.cf"
 
   if env -i PATH="$PATH" CONF_DIR="$_tmp" "$@" sh "$ENTRYPOINT" render >/dev/null 2>&1; then
     :
@@ -59,9 +63,53 @@ check_ok() {
     _ok=0
   fi
 
+  if cmp -s "$MASTER_SEED" "$_tmp/master.cf"; then
+    if [ "$RECORD" = "1" ]; then
+      rm -f "$GOLDEN_DIR/$_name.master.cf"
+    elif [ -f "$GOLDEN_DIR/$_name.master.cf" ]; then
+      printf 'FAIL %s: golden master.cf exists but render left the seed unchanged\n' "$_name" >&2
+      _ok=0
+    fi
+  elif [ "$RECORD" = "1" ]; then
+    cp "$_tmp/master.cf" "$GOLDEN_DIR/$_name.master.cf"
+  elif ! diff -u "$GOLDEN_DIR/$_name.master.cf" "$_tmp/master.cf" >&2; then
+    printf 'FAIL %s: master.cf differs from golden (or from the seed, if no golden exists)\n' "$_name" >&2
+    _ok=0
+  fi
+
   if [ "$_ok" = "1" ]; then
     pass=$((pass + 1))
   else
+    fail=$((fail + 1))
+  fi
+  rm -rf "$_tmp"
+}
+
+# check_master_cf NAME SEED EXPECTED VAR=VAL... — render over a master.cf copied
+# from SEED must exit 0 and leave exactly EXPECTED. SEED is a previous render's
+# output where a restart re-renders over the file it left behind.
+check_master_cf() {
+  _name=$1
+  _seed=$2
+  _want=$3
+  shift 3
+  _tmp=$(mktemp -d)
+  if ! cp "$_seed" "$_tmp/master.cf"; then
+    printf 'FAIL %s: no seed at %s\n' "$_name" "$_seed" >&2
+    fail=$((fail + 1))
+    rm -rf "$_tmp"
+    return
+  fi
+  if env -i PATH="$PATH" CONF_DIR="$_tmp" "$@" sh "$ENTRYPOINT" render >/dev/null 2>&1; then
+    if diff -u "$_want" "$_tmp/master.cf" >&2; then
+      pass=$((pass + 1))
+    else
+      printf 'FAIL %s: master.cf differs from %s\n' "$_name" "$_want" >&2
+      fail=$((fail + 1))
+    fi
+  else
+    _rc=$?
+    printf 'FAIL %s: render exited %d, expected 0\n' "$_name" "$_rc" >&2
     fail=$((fail + 1))
   fi
   rm -rf "$_tmp"
@@ -266,6 +314,83 @@ check_sasl_map_type() {
 
 check_sasl_map_type
 
+# METRICS_PORT adds one spawn(8) service to master.cf and nothing to main.cf.
+check_ok metrics \
+  RELAY_HOST=email-smtp.us-east-1.amazonaws.com \
+  METRICS_PORT=9154
+
+# Independent of the goldens, so re-recording a main.cf that METRICS_PORT
+# changed still fails.
+if cmp -s "$GOLDEN_DIR/minimal.main.cf" "$GOLDEN_DIR/metrics.main.cf"; then
+  pass=$((pass + 1))
+else
+  printf 'FAIL metrics-main-cf: METRICS_PORT changed main.cf (metrics.main.cf differs from minimal.main.cf)\n' >&2
+  fail=$((fail + 1))
+fi
+if [ "$(grep -c '^9154 *inet .* spawn$' "$GOLDEN_DIR/metrics.master.cf" || true)" = 1 ]; then
+  pass=$((pass + 1))
+else
+  printf 'FAIL metrics-service: metrics.master.cf does not hold exactly one inet spawn service on 9154\n' >&2
+  fail=$((fail + 1))
+fi
+
+# A restart renders over the file the last start left: one service, not two.
+check_master_cf metrics-rerender "$GOLDEN_DIR/metrics.master.cf" "$GOLDEN_DIR/metrics.master.cf" \
+  RELAY_HOST=email-smtp.us-east-1.amazonaws.com \
+  METRICS_PORT=9154
+
+# A CONF_DIR that outlives a METRICS_PORT removal gets the stock file back.
+check_master_cf metrics-removed "$GOLDEN_DIR/metrics.master.cf" "$MASTER_SEED" \
+  RELAY_HOST=email-smtp.us-east-1.amazonaws.com
+
+check_master_cf metrics-empty "$MASTER_SEED" "$MASTER_SEED" \
+  RELAY_HOST=email-smtp.us-east-1.amazonaws.com \
+  METRICS_PORT=
+
+check_master_cf metrics-leading-zero "$MASTER_SEED" "$GOLDEN_DIR/metrics.master.cf" \
+  RELAY_HOST=email-smtp.us-east-1.amazonaws.com \
+  METRICS_PORT=09154
+
+# The responder METRICS_PORT runs, under this shell and awk (BusyBox in the
+# image build), over a postqueue stub that replays two deferred messages. The
+# image build puts promtool on PATH, so its 0.0.4 parser always runs there.
+check_responder_exposition() {
+  _tmp=$(mktemp -d)
+  mkdir "$_tmp/bin"
+  {
+    printf '#!/bin/sh\n'
+    printf "printf '%%s\\\\n' '%s' '%s'\n" \
+      '{"queue_name": "deferred", "queue_id": "4F1A2B3C4D", "arrival_time": 1000, "sender": "app@example.com", "recipients": []}' \
+      '{"queue_name": "deferred", "queue_id": "5A1A2B3C4D", "arrival_time": 2000, "sender": "app@example.com", "recipients": []}'
+  } >"$_tmp/bin/postqueue"
+  chmod 755 "$_tmp/bin/postqueue"
+  printf 'version=v0.0.0\npostfix_version=3.11.7\n' >"$_tmp/build-info"
+  printf 'GET /metrics HTTP/1.1\r\nHost: relay\r\n\r\n' \
+    | env -i PATH="$_tmp/bin:$PATH" sh "$ENTRYPOINT_DIR/metrics-responder.sh" "$_tmp/build-info" >"$_tmp/reply"
+  sed '1,/^\r$/d' "$_tmp/reply" >"$_tmp/body"
+  _deferred=$(awk '$1 == "smtp_relay_queue_messages{queue=\"deferred\"}" { print $2 }' "$_tmp/body")
+  _age=$(awk '$1 == "smtp_relay_queue_oldest_message_age_seconds{queue=\"deferred\"}" { print $2 }' "$_tmp/body")
+  if [ "$_deferred" = 2 ] && [ "${_age:-0}" -gt 0 ]; then
+    pass=$((pass + 1))
+  else
+    printf 'FAIL responder-exposition: want 2 deferred and a positive age, got:\n%s\n' "$(cat "$_tmp/reply")" >&2
+    fail=$((fail + 1))
+  fi
+  if command -v promtool >/dev/null 2>&1; then
+    if promtool check metrics <"$_tmp/body" >&2; then
+      pass=$((pass + 1))
+    else
+      printf 'FAIL responder-promtool: promtool check metrics rejected the exposition\n' >&2
+      fail=$((fail + 1))
+    fi
+  else
+    printf 'note: promtool is not on PATH, so the exposition parse runs only in the image build\n' >&2
+  fi
+  rm -rf "$_tmp"
+}
+
+check_responder_exposition
+
 # --- Rejected configurations (exit 2) -------------------------------------
 check_fail no-relay-host 2 \
   RELAY_HOST=
@@ -277,6 +402,21 @@ check_fail open-relay 2 \
 check_fail bad-port 2 \
   RELAY_HOST=smtp.example.com \
   RELAY_PORT=70000
+
+for _metrics_port in 25 0025 0 65536 abc -1 '9154 ' 9154.0; do
+  check_fail "metrics-port-$_metrics_port" 2 \
+    RELAY_HOST=smtp.example.com \
+    "METRICS_PORT=$_metrics_port"
+done
+
+check_log metrics-port-smtp 2 'METRICS_PORT must differ from 25' \
+  RELAY_HOST=smtp.example.com \
+  METRICS_PORT=25
+
+# Render mode with no master.cf to extend is a runtime fault, not a setting.
+check_log metrics-no-master-cf 1 'master.cf not found' \
+  RELAY_HOST=smtp.example.com \
+  METRICS_PORT=9154
 
 check_fail bad-network-trailing-dot 2 \
   RELAY_HOST=smtp.example.com \

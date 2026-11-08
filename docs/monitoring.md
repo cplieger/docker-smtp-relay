@@ -4,7 +4,7 @@ This page explains what docker-smtp-relay writes to its log and how to alert whe
 
 ## What the relay logs
 
-The relay has no metrics endpoint, so its state is in the container log. All times are in UTC.
+All times in the container log are in UTC.
 
 The startup steps write `level=... msg="..."` pairs. The last one before Postfix takes over is `msg="starting smtp-relay"`. It carries the relay host, the outbound and inbound TLS levels and the accepted networks. It also carries the queue depth left from the previous run, as `queue_active` and `queue_deferred`. `queue_scan_ok=false` means the queue could not be counted and the two numbers are not reliable. The depth makes a restart during a provider outage easy to spot.
 

@@ -26,6 +26,7 @@ Every setting is an environment variable in the compose file. The container read
 | `SMTPD_TLS_SECURITY_LEVEL` | Inbound TLS level, `may` or `encrypt`. Setting it without the certificate and key is refused | `may` when the certificate is set |
 | `STARTUP_PROBE` | `true` checks at start that your provider's server answers on its port, and logs the result | `true` |
 | `STARTUP_PROBE_TIMEOUT` | Seconds the startup check waits for an answer, from 1 to 10 | `5` |
+| `METRICS_PORT` | Port, from 1 to 65535 and not 25, on which Postfix serves Prometheus metrics about its queue at `/metrics`. Publish it only to the network your Prometheus uses. Unset serves nothing and leaves the Postfix configuration unchanged | _(unset)_ |
 | `CONF_DIR` | Folder the generated Postfix files are written to, used by the tests. Leave it unset, because Postfix always reads `/etc/postfix` | `/etc/postfix` |
 
 `ACCEPTED_NETWORKS` takes its default only when the variable is absent. The shipped compose file sets it to `192.168.0.0/16`, and an empty value is refused. IPv6 networks work in either `fd00::/8` or `[fd00::]/8` form. An entry outside private address space draws a startup warning, because a mistyped prefix such as `192.168.0.0/8` passes the /8 floor and covers about 16 million public addresses.
