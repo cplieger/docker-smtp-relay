@@ -1,3 +1,5 @@
+acl 2.3.2-r1 LGPL-2.1-or-later AND GPL-2.0-or-later acl
+acl-libs 2.3.2-r1 LGPL-2.1-or-later AND GPL-2.0-or-later acl
 alpine-baselayout 3.7.2-r1 GPL-2.0-only alpine-baselayout
 alpine-baselayout-data 3.7.2-r1 GPL-2.0-only alpine-baselayout
 alpine-keys 2.6-r0 MIT alpine-keys

@@ -2,15 +2,7 @@
 # The run-mode step that lets the METRICS_PORT responder read the queue under
 # no-new-privileges: no_new_privs and sync_metrics_queue_access, and their place
 # after run_postfix_checks in the run mode.
-#
-# The responder reaches showq through public/, which only group postdrop may
-# search. postqueue gets that group from its setgid bit, which the kernel ignores
-# under no-new-privileges, and spawn(8) refuses to run a command as postdrop. A
-# POSIX ACL entry for the responder's user is the one grant left, and only the
-# image smoke, which runs with no-new-privileges, proves it end to end. These
-# cases pin the arms a healthy smoke never takes: a spool that refuses ACLs, a
-# timeout, and the removal of a grant nothing needs any more.
-#
+
 # `timeout` is the only command stub: run_bounded spawns setfacl through it.
 # Lint directives for this whole file:
 #   SC2015 - lib.sh's ok/no return 0 unconditionally, so `[ cond ] && ok || no`

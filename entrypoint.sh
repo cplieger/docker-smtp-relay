@@ -795,9 +795,11 @@ no_new_privs() {
 }
 
 # Only group postdrop may search public/, where the responder reaches showq.
-# Under no-new-privileges postqueue's setgid bit is ignored and spawn(8) refuses
-# a postdrop user=, so this POSIX ACL entry is the grant. It survives the 0710
-# chmod of `postfix set-permissions`; setfacl -x exits 0 with no entry.
+# Under no-new-privileges postqueue's setgid bit is ignored. Running the
+# responder as group postdrop would give it maildrop and every public/ service,
+# and Postfix's development line refuses that user= in spawn(8), so this POSIX
+# ACL entry is the grant. It survives the 0710 chmod of `postfix
+# set-permissions`; setfacl -x exits 0 with no entry.
 sync_metrics_queue_access() {
   _mqa_status=0
   if [ -n "$METRICS_PORT_VALUE" ] && no_new_privs /proc/self/status; then
