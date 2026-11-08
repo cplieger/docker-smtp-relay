@@ -34,12 +34,12 @@ The rules are in [`alerts/`](../alerts/). [`alerts/logql.yaml`](../alerts/logql.
 
 `alerts/logql.yaml` has two groups. `smtp-relay-state` holds `SmtpRelayMailStuck`, and `smtp-relay-events` holds `SmtpRelayMailBounced`. Load the `smtp-relay-events` group always, because a bounce has no metric. Load `smtp-relay-state` only if you do not load `alerts/promql.yaml`, or `SmtpRelayMailStuck` fires twice.
 
-In `alerts/logql.yaml`, `SmtpRelayMailStuck` reads the `delay=` field of each `status=deferred` line, which is how long the message has waited since it arrived, so it fires on the first retry of a message older than 30 minutes. In `alerts/promql.yaml` it reads `smtp_relay_queue_oldest_message_age_seconds` and fires once that age has stayed over 30 minutes for 5 minutes. Either way it fires however little mail the relay carries. When it fires, the common causes are a bad `RELAY_LOGIN` or `RELAY_PASSWORD`, a wrong `SMTP_TLS_SECURITY_LEVEL`, or your provider rejecting or throttling the sender. The deferred lines carry your provider's reply.
+In `alerts/logql.yaml`, `SmtpRelayMailStuck` reads the `delay=` field of each `status=deferred` line, which is how long the message has waited since it arrived. It fires on the first retry of a message older than 30 minutes. It stays firing for up to 90 minutes after the last deferral, because its window must outlast Postfix's longest wait between two retries. In `alerts/promql.yaml` it reads `smtp_relay_queue_oldest_message_age_seconds` and fires once that age has stayed over 30 minutes for 5 minutes. Either way it fires however little mail the relay carries. When it fires, the common causes are a bad `RELAY_LOGIN` or `RELAY_PASSWORD`, a wrong `SMTP_TLS_SECURITY_LEVEL`, or your provider rejecting or throttling the sender. The deferred lines carry your provider's reply.
 
 `SmtpRelayMailBounced` fires on any `status=bounced` line. A bounced message is not retried, and a sender with no mailbox, such as most apps and devices, never hears about it.
 
 Send these alerts to a receiver that is not email, such as a chat or push service. An email about a failing relay would travel through the relay that is failing.
 
-Mail the relay refuses itself logs `NOQUEUE: reject`, and no rule reads it, because refusing mail outside `RECIPIENT_RESTRICTIONS` is that setting's job. If you want delivery counts on a dashboard, add a log-to-metric step in your log collector or a Postfix exporter.
+No rule reads `NOQUEUE: reject` lines: the relay refuses that mail while the sending app is still connected, so the app gets the error itself. If you want delivery counts on a dashboard, add a log-to-metric step in your log collector or a Postfix exporter.
 
 Thresholds and the `severity` label are starting points. Tune the 30-minute age to how long your mail may wait, and change the `container` selector to the label your log collector sets, such as `job` or `service`. Route by whatever labels your Alertmanager uses.

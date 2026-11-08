@@ -6,9 +6,9 @@
 # shell unit testing by committing this file. Keep the name. The hook tests -f and
 # invokes it through `bash`, so the exec bit is not load-bearing.
 #
-# SCOPE. The shipped shell is FOUR files — entrypoint.sh (PID 1, modes
+# SCOPE. The shipped shell is four files: entrypoint.sh (PID 1, modes
 # run|render), the sourced validate.sh and recipient-filter.sh, and
-# metrics-responder.sh, which spawn(8) runs per METRICS_PORT scrape — and the
+# metrics-responder.sh, which spawn(8) runs for each METRICS_PORT scrape. The
 # other two harnesses reach only part of it. image-smoke.sh asserts the image boots, so
 # it never takes a failure branch. render-test.sh drives `entrypoint.sh render`,
 # which stops at two hard edges: render mode returns before the whole run-mode half

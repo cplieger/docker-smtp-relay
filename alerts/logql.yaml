@@ -11,11 +11,13 @@ groups:
   - name: smtp-relay-state
     rules:
       # `delay=` is the time since the message arrived, logged on every
-      # attempt. The 75m window is longer than Postfix's longest retry backoff
-      # (4000s by default), so a stuck message always has a line in range.
+      # attempt. The window must be longer than the longest gap between two
+      # attempts: maximal_backoff_time (4000s by default) plus queue_run_delay
+      # (300s) plus one attempt's timeouts, such as smtp_helo_timeout (300s).
+      # The alert keeps firing for up to the window after the last deferral.
       - alert: SmtpRelayMailStuck
         expr: |
-          max_over_time({container="smtp-relay"} |= "status=deferred" | regexp "delay=(?P<delay>[0-9.]+)" | unwrap delay | __error__="" [75m]) by (container) > 1800
+          max_over_time({container="smtp-relay"} |= ", status=deferred " | regexp ", delay=(?P<delay>[0-9.]+)," | unwrap delay | __error__="" [90m]) by (container) > 1800
         for: 0m
         labels:
           severity: warning
@@ -30,7 +32,7 @@ groups:
     rules:
       - alert: SmtpRelayMailBounced
         expr: |
-          sum by (container) (count_over_time({container="smtp-relay"} |= "status=bounced" [15m])) > 0
+          sum by (container) (count_over_time({container="smtp-relay"} |= ", status=bounced " [15m])) > 0
         for: 0m
         labels:
           severity: warning

@@ -535,7 +535,8 @@ EOF
 }
 
 # Leading zeroes are stripped (validate_range's min of 1 keeps the value
-# non-empty), because Postfix would not read 09154 as the port the user set.
+# non-empty) so the master.cf service name, which `postconf -M <port>/inet` and
+# the <port>_time_limit lookup key on, is the plain port.
 compute_metrics_port() {
   METRICS_PORT_VALUE=$METRICS_PORT
   while [ "${METRICS_PORT_VALUE#0}" != "$METRICS_PORT_VALUE" ]; do

@@ -85,7 +85,7 @@ check_ok() {
   rm -rf "$_tmp"
 }
 
-# check_master_cf NAME SEED EXPECTED VAR=VAL... — render over a master.cf copied
+# check_master_cf NAME SEED EXPECTED VAR=VAL...: render over a master.cf copied
 # from SEED must exit 0 and leave exactly EXPECTED. SEED is a previous render's
 # output where a restart re-renders over the file it left behind.
 check_master_cf() {
