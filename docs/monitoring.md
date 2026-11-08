@@ -46,6 +46,8 @@ In `alerts/logql.yaml`, `SmtpRelayMailStuck` reads the `delay=` field of each `s
 
 `SmtpRelayMailBounced` fires on any `status=bounced` line. A bounced message is not retried, and a sender with no mailbox, such as most apps and devices, never hears about it.
 
+`SmtpRelayDown` reads only the page, which Postfix still serves while smtpd is wedged. An outside probe of port 25 catches that case.
+
 Send these alerts to a receiver that is not email, such as a chat or push service. An email about a failing relay would travel through the relay that is failing.
 
 No rule reads `NOQUEUE: reject` lines: the relay refuses that mail while the sending app is still connected, so the app gets the error itself. If you want delivery counts on a dashboard, add a log-to-metric step in your log collector or a Postfix exporter.

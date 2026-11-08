@@ -548,9 +548,9 @@ readonly METRICS_BLOCK_BEGIN='# BEGIN METRICS_PORT service, rendered by entrypoi
 readonly METRICS_BLOCK_END='# END METRICS_PORT service'
 
 readonly METRICS_SUMMARY=/run/smtp-relay/queue-summary
-# One pass per 15 s, the scrape interval docs/monitoring.md assumes. The bound
-# covers one failed pass: two intervals plus the reader's 10 s postqueue limit
-# and its kill grace come to 54 s.
+# 15 s per pass. The bound allows one failed pass: two intervals plus two
+# postqueue runs at their 12 s worst case (10 s limit, 2 s kill grace) come to
+# 54 s.
 readonly METRICS_READ_INTERVAL=15
 readonly METRICS_SUMMARY_MAX_AGE=60
 

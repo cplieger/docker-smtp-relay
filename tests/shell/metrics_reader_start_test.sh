@@ -1,13 +1,11 @@
 #!/usr/bin/env bash
 # How the run mode starts the METRICS_PORT queue reader, and which groups the
-# reader and the spawn(8) responder end up holding.
-#
-# The reader gets postdrop as a supplementary group: BusyBox su takes a user's
-# groups from /etc/group, and the Dockerfile lists smtp-metrics in postdrop.
-# The responder must not: spawn(8) sets only the user's primary group
-# (set_ugid.c, setgroups(1, &gid)), so it holds postdrop only if user= names it
-# or it is smtp-metrics' primary group. Both sides are read from the shipped
-# files at run time; the image smoke test reads the live processes.
+# reader and the spawn(8) responder end up holding. The reader gets postdrop as
+# a supplementary group: BusyBox su takes a user's groups from /etc/group, and
+# the Dockerfile lists smtp-metrics in postdrop. The responder must not:
+# spawn(8) sets only the user's primary group, so it holds postdrop only if
+# user= names it or it is smtp-metrics' primary group. Both sides are read from
+# the shipped files at run time; the image smoke test reads the live processes.
 # shellcheck disable=SC2015,SC2016,SC2034,SC2329
 set -u
 

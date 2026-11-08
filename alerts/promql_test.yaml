@@ -23,7 +23,7 @@ tests:
               instance: relay:9154
             exp_annotations:
               summary: "docker-smtp-relay is down or cannot read its queue"
-              description: "For 5m the METRICS_PORT scrape has failed or reported smtp_relay_queue_scrape_ok 0. A failed scrape means the container is stopped or restarting, Postfix's master process is down, or the scrape cannot reach the port. A scrape_ok of 0 means the background queue reader has stopped or cannot read the queue; the container log says which. A wedged smtpd still answers this scrape; an outside probe of port 25 sees it."
+              description: "For 5m the METRICS_PORT scrape failed or reported smtp_relay_queue_scrape_ok 0. A failed scrape means the container, Postfix or the network path is down; scrape_ok 0 means the queue reader stopped or cannot read the queue. The container log says which."
 
   # A target that is gone entirely leaves no up series; the absent arm fires.
   - interval: 1m
@@ -39,7 +39,7 @@ tests:
               job: smtp-relay
             exp_annotations:
               summary: "docker-smtp-relay is down or cannot read its queue"
-              description: "For 5m the METRICS_PORT scrape has failed or reported smtp_relay_queue_scrape_ok 0. A failed scrape means the container is stopped or restarting, Postfix's master process is down, or the scrape cannot reach the port. A scrape_ok of 0 means the background queue reader has stopped or cannot read the queue; the container log says which. A wedged smtpd still answers this scrape; an outside probe of port 25 sees it."
+              description: "For 5m the METRICS_PORT scrape failed or reported smtp_relay_queue_scrape_ok 0. A failed scrape means the container, Postfix or the network path is down; scrape_ok 0 means the queue reader stopped or cannot read the queue. The container log says which."
 
   # A healthy scrape with a fresh queue summary never fires.
   - interval: 1m
@@ -76,7 +76,7 @@ tests:
               instance: relay:9154
             exp_annotations:
               summary: "docker-smtp-relay is down or cannot read its queue"
-              description: "For 5m the METRICS_PORT scrape has failed or reported smtp_relay_queue_scrape_ok 0. A failed scrape means the container is stopped or restarting, Postfix's master process is down, or the scrape cannot reach the port. A scrape_ok of 0 means the background queue reader has stopped or cannot read the queue; the container log says which. A wedged smtpd still answers this scrape; an outside probe of port 25 sees it."
+              description: "For 5m the METRICS_PORT scrape failed or reported smtp_relay_queue_scrape_ok 0. A failed scrape means the container, Postfix or the network path is down; scrape_ok 0 means the queue reader stopped or cannot read the queue. The container log says which."
       - eval_time: 6m
         alertname: SmtpRelayMailStuck
         exp_alerts: []

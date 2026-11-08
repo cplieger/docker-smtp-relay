@@ -6,8 +6,6 @@
 # Nothing restarts it. It installs no TERM trap, so the TERM Postfix's master
 # sends every process at stop ends it.
 set -u
-: "${PATH:=/usr/sbin:/usr/bin:/sbin:/bin}"
-export PATH
 # The raw listing holds sender and recipient addresses.
 umask 077
 

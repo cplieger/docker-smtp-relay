@@ -373,7 +373,7 @@ EOF
   chmod 755 "$_tmp/bin/postqueue" "$_tmp/bin/sleep"
   printf 'version=v0.0.0\npostfix_version=3.11.7\n' >"$_tmp/build-info"
   # The outer stderr only carries the shell's own "Terminated" notice.
-  (env -i PATH="$_tmp/bin:$PATH" SLEPT="$_tmp/slept" sh "$ENTRYPOINT_DIR/metrics-reader.sh" "$_tmp/run/queue-summary" 15 \
+  (env -i PATH="$_tmp/bin:$PATH" SLEPT="$_tmp/slept" timeout -k 2 20 sh "$ENTRYPOINT_DIR/metrics-reader.sh" "$_tmp/run/queue-summary" 15 \
     2>"$_tmp/reader.log" || exit $?) 2>/dev/null || :
   printf 'GET /metrics HTTP/1.1\r\nHost: relay\r\n\r\n' \
     | env -i PATH="$_tmp/bin:$PATH" sh "$ENTRYPOINT_DIR/metrics-responder.sh" "$_tmp/build-info" "$_tmp/run/queue-summary" 60 >"$_tmp/reply"
