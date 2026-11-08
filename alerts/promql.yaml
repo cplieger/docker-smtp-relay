@@ -1,0 +1,39 @@
+# Alert rules for docker-smtp-relay as a Prometheus rule group, for Prometheus,
+# Mimir, vmalert or any ruler that reads Prometheus rules. They read the page
+# Postfix serves when METRICS_PORT is set; scrape it as job `smtp-relay`. This
+# file is the alternative to the smtp-relay-state group of alerts/logql.yaml:
+# load one of the two, or SmtpRelayMailStuck fires twice. Load the
+# smtp-relay-events group of alerts/logql.yaml beside it, because a bounce has
+# no metric. SmtpRelayDown exists only in this file; with logs only, an outside
+# probe of port 25 covers a dead relay. Thresholds and severity labels are
+# starting points. Notes are in docs/monitoring.md.
+groups:
+  - name: smtp-relay
+    rules:
+      # Two arms, because neither covers the other: `up == 0` catches a target
+      # that fails its scrape and keeps its labels, `absent(up{...})` catches a
+      # target that is gone. Use an exact job matcher, never a regex.
+      - alert: SmtpRelayDown
+        expr: up{job="smtp-relay"} == 0 or absent(up{job="smtp-relay"})
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "docker-smtp-relay is not being scraped"
+          description: >-
+            No successful scrape of METRICS_PORT for 5m: the container is
+            stopped or restarting, Postfix's master process is down, or the
+            scrape cannot reach the port. A wedged smtpd still answers this
+            scrape; an outside probe of port 25 sees it.
+      - alert: SmtpRelayMailStuck
+        expr: smtp_relay_queue_oldest_message_age_seconds{queue="deferred"} > 1800
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Mail has waited over 30 minutes in the smtp-relay queue"
+          description: >-
+            The oldest deferred message arrived {{ $value }}s ago. Postfix
+            keeps retrying for up to five days. The deferred lines in the
+            container log carry your provider's reply; check the login, the
+            TLS level and the provider's status.

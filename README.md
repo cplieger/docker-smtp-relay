@@ -120,7 +120,7 @@ Every 30 seconds, the healthcheck checks that Postfix answers on port 25 with it
 
 ## Monitoring
 
-With `METRICS_PORT` set, Postfix serves Prometheus metrics about its queue. Postfix logs every delivery attempt to the container log with `status=sent`, `status=deferred` or `status=bounced`, and the startup lines are `level=... msg=...` pairs. Alert rules for Loki ship in [`alerts/`](alerts/), and [Monitoring and alerts](docs/monitoring.md) explains the lines, which rules to load and why alerts about the relay should not travel by email.
+With `METRICS_PORT` set, Postfix serves Prometheus metrics about its queue. Postfix logs every delivery attempt to the container log with `status=sent`, `status=deferred` or `status=bounced`, and the startup lines are `level=... msg=...` pairs. Alert rules for Loki and for Prometheus ship in [`alerts/`](alerts/), and [Monitoring and alerts](docs/monitoring.md) explains the lines, which rules to load and why alerts about the relay should not travel by email.
 
 ## Documentation
 

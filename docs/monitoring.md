@@ -24,16 +24,17 @@ The startup check, `STARTUP_PROBE`, opens a plain TCP connection to `RELAY_HOST`
 
 ## Alerting
 
-The rules are in [`alerts/logql.yaml`](../alerts/logql.yaml), for Loki's ruler. Load the file as [Loading an app's alert rules](https://github.com/cplieger/docs/blob/main/docs/monitoring.md#loading-an-apps-alert-rules) shows. Both rules read Postfix's own delivery lines.
+The rules are in [`alerts/`](../alerts/). [`alerts/logql.yaml`](../alerts/logql.yaml) is for Loki's ruler and reads Postfix's own delivery lines. [`alerts/promql.yaml`](../alerts/promql.yaml) is for Prometheus, Mimir or vmalert and reads the page `METRICS_PORT` serves, scraped as job `smtp-relay`. Load them as [Loading an app's alert rules](https://github.com/cplieger/docs/blob/main/docs/monitoring.md#loading-an-apps-alert-rules) shows.
 
-| Alert | Fires when | Severity |
-| --- | --- | --- |
-| `SmtpRelayMailStuck` | Postfix deferred a delivery attempt for a message that arrived more than 30 minutes ago | warning |
-| `SmtpRelayMailBounced` | your provider refused a message for good in the last 15 minutes | warning |
+| Alert | Fires when | Severity | File |
+| --- | --- | --- | --- |
+| `SmtpRelayMailStuck` | the oldest deferred message arrived more than 30 minutes ago | warning | both |
+| `SmtpRelayMailBounced` | your provider refused a message for good in the last 15 minutes | warning | `logql.yaml`, group `smtp-relay-events` |
+| `SmtpRelayDown` | the `smtp-relay` scrape has failed for 5 minutes | warning | `promql.yaml` |
 
-The file has two groups. `smtp-relay-state` holds `SmtpRelayMailStuck`, and `smtp-relay-events` holds `SmtpRelayMailBounced`. Load both.
+`alerts/logql.yaml` has two groups. `smtp-relay-state` holds `SmtpRelayMailStuck`, and `smtp-relay-events` holds `SmtpRelayMailBounced`. Load the `smtp-relay-events` group always, because a bounce has no metric. Load `smtp-relay-state` only if you do not load `alerts/promql.yaml`, or `SmtpRelayMailStuck` fires twice.
 
-`SmtpRelayMailStuck` reads the `delay=` field of each `status=deferred` line, which is how long the message has waited since it arrived. It fires on the first retry of a message older than 30 minutes, however little mail the relay carries. When it fires, the common causes are a bad `RELAY_LOGIN` or `RELAY_PASSWORD`, a wrong `SMTP_TLS_SECURITY_LEVEL`, or your provider rejecting or throttling the sender. The deferred lines carry your provider's reply.
+In `alerts/logql.yaml`, `SmtpRelayMailStuck` reads the `delay=` field of each `status=deferred` line, which is how long the message has waited since it arrived, so it fires on the first retry of a message older than 30 minutes. In `alerts/promql.yaml` it reads `smtp_relay_queue_oldest_message_age_seconds` and fires once that age has stayed over 30 minutes for 5 minutes. Either way it fires however little mail the relay carries. When it fires, the common causes are a bad `RELAY_LOGIN` or `RELAY_PASSWORD`, a wrong `SMTP_TLS_SECURITY_LEVEL`, or your provider rejecting or throttling the sender. The deferred lines carry your provider's reply.
 
 `SmtpRelayMailBounced` fires on any `status=bounced` line. A bounced message is not retried, and a sender with no mailbox, such as most apps and devices, never hears about it.
 
