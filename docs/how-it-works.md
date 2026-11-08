@@ -9,7 +9,7 @@ This page describes the design of docker-smtp-relay and what happens each time t
 - Every setting is checked before Postfix starts. A bad value stops the container with a log line, instead of starting a relay that is set up wrong.
 - Postfix is the container's main process, started in the foreground with `postfix start-fg`, so Docker's stop signal reaches it directly. When it stops, the container exits and Docker's restart policy starts it again, with no supervisor in between.
 - With `METRICS_PORT` set, the entrypoint also starts one background process, the queue reader, just before Postfix. It runs as the unprivileged `smtp-metrics` user with the `postdrop` group, which `postqueue` needs to read the queue under no-new-privileges. Nothing restarts it, and Postfix ends it when the container stops. [Monitoring and alerts](monitoring.md#metrics) describes what it does.
-- Postfix's spawn(8) service answers metrics scrapes when `METRICS_PORT` is set. It serves the summary the reader writes, so Postfix stays the main process.
+- Postfix's spawn(8) service answers metrics scrapes when `METRICS_PORT` is set, with the summary the reader writes. spawn(8) is part of Postfix, so no other server runs beside it.
 
 ## What happens at each start
 

@@ -7,7 +7,7 @@ This page covers what docker-smtp-relay reports, how to get alerts from it and w
 | You run | You get | You set up |
 | --- | --- | --- |
 | Prometheus, Mimir or VictoriaMetrics, with Alertmanager (the monitoring guide's starting stack adds Loki) | `SmtpRelayMailStuck` and `SmtpRelayDown` from the metrics page, a graph of each queue, and `SmtpRelayMailBounced` from Loki | `METRICS_PORT`, a scrape job named `smtp-relay`, `alerts/promql.yaml`, and the `smtp-relay-events` group of `alerts/logql.yaml` in Loki's ruler |
-| Loki and Alertmanager, no metric store | `SmtpRelayMailStuck` and `SmtpRelayMailBounced`. No log rule sees a stopped relay, so add an outside probe of port 25 | All of `alerts/logql.yaml` |
+| Loki and Alertmanager, no metric store | `SmtpRelayMailStuck` and `SmtpRelayMailBounced`. No log rule sees a stopped relay. | All of `alerts/logql.yaml`, and an uptime prober that opens TCP port 25 and expects the `220` greeting |
 | Grafana-managed alerting only | The same alerts, as Grafana rules | The rule files imported into Grafana, each with its data source |
 | Docker or Unraid only | The container log and Docker's health status, which notify nobody | An uptime prober that opens TCP port 25 and expects the `220` greeting |
 
@@ -26,7 +26,7 @@ The reader runs as the unprivileged `smtp-metrics` user with the `postdrop` grou
 | `smtp_relay_queue_scrape_ok` | gauge | | 1 while the queue summary is at most 60 seconds old, else 0 |
 | `smtp_relay_build_info` | gauge | `version`, `postfix_version` | Always 1, with labels that name the image version and the Postfix version |
 
-The 60-second bound allows one failed read. Past it, `smtp_relay_queue_scrape_ok` is 0 and the page leaves out the two queue series, so an old count is never reported. Right after a start the page reports 0 until the first read, 15 seconds in. Nothing restarts a reader that stops, and a restart of the container starts a new one.
+The 60-second bound allows one failed read. Past it, `smtp_relay_queue_scrape_ok` is 0 and the page leaves out the two queue series, so an old count is never reported. Right after a start, `smtp_relay_queue_scrape_ok` is 0 and the queue series are missing until the first read, 15 seconds in. Nothing restarts a reader that stops, and a restart of the container starts a new one.
 
 Postfix keeps no delivery counters, so the page reports the queue, not deliveries. If you want delivery counts on a dashboard, add a log-to-metric step in your log collector or a Postfix exporter.
 
@@ -53,7 +53,7 @@ These fields are Postfix's own wording. The image's tests send mail through the 
 
 Mail the relay refuses itself, because the sender is outside `ACCEPTED_NETWORKS` or the recipient fails `RECIPIENT_RESTRICTIONS`, logs as `NOQUEUE: reject` with no `status=` field.
 
-With `METRICS_PORT` set, a queue reader that cannot read the queue logs `METRICS_PORT queue reader cannot read the queue` once, with `postqueue`'s exit status. It logs `reads the queue again` when it recovers.
+With `METRICS_PORT` set, a queue reader that cannot read the queue logs `METRICS_PORT queue reader cannot read the queue` once, with a `status=` field. 124 or 137 means `postqueue` did not answer within 10 seconds. It logs `reads the queue again` when it recovers.
 
 ## Alerting
 
@@ -99,6 +99,6 @@ The relay serves no HTTP health page. The page on `METRICS_PORT` serves `/metric
 | Loki only | an outside probe of port 25 | mail that waits: `SmtpRelayMailStuck`. Postfix not answering on port 25: an outside probe of port 25 |
 | Docker or Unraid only | an uptime prober on port 25, or something that watches Docker health | the same |
 
-`SmtpRelayDown` sees Postfix stop, but not a Postfix that still serves the metrics page while it no longer answers mail on port 25. An outside probe that expects `220` on port 25 sees both. Mail that Postfix accepts but never sends leaves port 25 answering, so only `SmtpRelayMailStuck` sees it.
+`SmtpRelayDown` sees Postfix stop, but not a Postfix that still serves the metrics page while it no longer answers mail on port 25. An outside probe that expects `220` on port 25 sees both. Mail that Postfix accepts and keeps deferring leaves port 25 answering, so only `SmtpRelayMailStuck` sees it.
 
 **Probing from outside.** Open a TCP connection to port 25 of the address your apps send mail to, and pass only when the first line it reads starts with `220`. A probe that only checks that the port opens still sees a stopped container, but not a Postfix that stopped greeting. Use a 5-second timeout, check every 60 seconds, alert after 3 failures, and wait 15 seconds after a first start. The probe sends no mail and needs no login, and `ACCEPTED_NETWORKS` does not apply to it, because Postfix greets every connection before any mail is sent.
