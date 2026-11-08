@@ -789,6 +789,31 @@ run_postfix_checks() {
   fi
 }
 
+no_new_privs() {
+  awk '$1 == "NoNewPrivs:" { set = ($2 == 1) } END { exit !set }' "$1" 2>/dev/null
+}
+
+# Only group postdrop may search public/, where the responder reaches showq.
+# Under no-new-privileges postqueue's setgid bit is ignored and spawn(8) refuses
+# a postdrop user=, so this POSIX ACL entry is the grant. It survives the 0710
+# chmod of `postfix set-permissions`; setfacl -x exits 0 with no entry.
+sync_metrics_queue_access() {
+  _mqa_status=0
+  if [ -n "$METRICS_PORT_VALUE" ] && no_new_privs /proc/self/status; then
+    run_bounded setfacl -m u:smtp-metrics:--x /var/spool/postfix/public || _mqa_status=$?
+    if [ "$_mqa_status" -ne 0 ]; then
+      printf 'level=warn msg="cannot grant the METRICS_PORT responder access to the queue under no-new-privileges; scrapes will report smtp_relay_queue_scrape_ok 0" path="/var/spool/postfix/public"%s\n' \
+        "$(timeout_log_fields "$_mqa_status")" >&2
+    fi
+    return 0
+  fi
+  run_bounded setfacl -x u:smtp-metrics /var/spool/postfix/public || _mqa_status=$?
+  if [ "$_mqa_status" -ne 0 ]; then
+    printf 'level=warn msg="cannot remove the METRICS_PORT responder queue access entry" path="/var/spool/postfix/public"%s\n' \
+      "$(timeout_log_fields "$_mqa_status")" >&2
+  fi
+}
+
 # Fail-soft: a failure warns and returns 0 so mail still queues (the relay may be
 # transiently down at boot). A plain TCP connect is deliberate: it catches the
 # common deploy-time faults (DNS, routing, wrong port, firewall) for both STARTTLS
@@ -937,6 +962,7 @@ case "$MODE" in
     # startup step added below that reads them aborts PID 1.
     unset RELAY_PASSWORD RELAY_LOGIN
     run_postfix_checks
+    sync_metrics_queue_access
     probe_upstream
     log_startup
     # The startup trap stays armed through exec: clearing it here would open a

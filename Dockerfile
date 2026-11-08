@@ -216,6 +216,9 @@ ARG PKG_REFRESH=static
 RUN echo "OS package refresh: ${PKG_REFRESH}" \
     && apk upgrade --no-cache \
     && apk add --no-cache \
+        # setfacl grants the METRICS_PORT responder queue access under
+        # no-new-privileges (entrypoint.sh sync_metrics_queue_access).
+        acl \
         ca-certificates \
         cyrus-sasl \
         cyrus-sasl-login \
@@ -312,6 +315,8 @@ RUN command -v promtool >/dev/null \
       || { printf '%s\n' 'FAIL: /usr/sbin/postdrop lost its setgid bit' >&2; exit 1; }; } \
     && { test -g /usr/sbin/postqueue \
       || { printf '%s\n' 'FAIL: /usr/sbin/postqueue lost its setgid bit' >&2; exit 1; }; } \
+    && { command -v setfacl >/dev/null \
+      || { printf '%s\n' 'FAIL: setfacl is missing; METRICS_PORT cannot read the queue under no-new-privileges' >&2; exit 1; }; } \
     # Turns silent hardening regressions (a toolchain or makedefs change) into
     # build failures. pax-utils (scanelf) is test-stage-only and never ships. If a
     # strip or UPX step is ever added, keep the symbol check before strip and the
