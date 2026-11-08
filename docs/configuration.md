@@ -26,7 +26,7 @@ Every setting is an environment variable in the compose file. The container read
 | `SMTPD_TLS_SECURITY_LEVEL` | Inbound TLS level, `may` or `encrypt`. Setting it without the certificate and key is refused | `may` when the certificate is set |
 | `STARTUP_PROBE` | `true` checks at start that your provider's server answers on its port, and logs the result | `true` |
 | `STARTUP_PROBE_TIMEOUT` | Seconds the startup check waits for an answer, from 1 to 10 | `5` |
-| `METRICS_PORT` | Port, from 1 to 65535 and not 25, on which Postfix serves Prometheus metrics about its queue at `/metrics`. Publish it only to the network your Prometheus uses. It also starts one background process that reads the queue every 15 seconds, as [Monitoring and alerts](monitoring.md#what-metrics_port-serves) explains. Unset serves nothing and leaves the Postfix configuration unchanged | _(unset)_ |
+| `METRICS_PORT` | Port, 1 to 65535 and not 25, for a Prometheus metrics page about the mail queue. Unset serves no page | _(unset)_ |
 | `CONF_DIR` | Folder the generated Postfix files are written to, used by the tests. Leave it unset, because Postfix always reads `/etc/postfix` | `/etc/postfix` |
 
 `ACCEPTED_NETWORKS` takes its default only when the variable is absent. The shipped compose file sets it to `192.168.0.0/16`, and an empty value is refused. IPv6 networks work in either `fd00::/8` or `[fd00::]/8` form. An entry outside private address space draws a startup warning, because a mistyped prefix such as `192.168.0.0/8` passes the /8 floor and covers about 16 million public addresses.
@@ -34,6 +34,8 @@ Every setting is an environment variable in the compose file. The container read
 `RELAY_LOGIN` must not contain a colon, start with whitespace or end with a newline, and `RELAY_PASSWORD` must not end with whitespace. Each of those would change the login the relay sends. Every other character is kept as you typed it.
 
 `SMTP_HOSTNAME` refuses whitespace and shell metacharacters, and it does not check that the value is a full domain name.
+
+`METRICS_PORT` must be a whole number from 1 to 65535 and must not be 25. A bad value stops the container with exit code 2 and a `level=error` line that names the variable. When it is set, Postfix serves the page at `/metrics` with no login, so publish the port only to the network your Prometheus uses. The relay also starts one background process that reads the queue every 15 seconds, as [Monitoring and alerts](monitoring.md#metrics) explains. Unset, the relay renders no metrics service and leaves the Postfix configuration unchanged.
 
 `CONF_DIR` must be an existing writable folder. Setting it in a normal start logs a warning, because Postfix then runs on a configuration the relay did not write.
 
