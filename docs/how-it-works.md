@@ -8,6 +8,7 @@ This page describes the design of docker-smtp-relay and what happens each time t
 - Configuration comes from environment variables only. The entrypoint writes `main.cf` and the recipient filter from them at every start, so there is no Postfix file to learn or keep in step.
 - Every setting is checked before Postfix starts. A bad value stops the container with a log line, instead of starting a relay that is set up wrong.
 - Postfix is the container's main process, started in the foreground with `postfix start-fg`, so Docker's stop signal reaches it directly. When it stops, the container exits and Docker's restart policy starts it again, with no supervisor in between.
+- With `METRICS_PORT` set, the entrypoint also starts one background process, the queue reader, just before Postfix. It runs as the unprivileged `smtp-metrics` user with the `postdrop` group, which `postqueue` needs to read the queue under no-new-privileges. Nothing restarts it, and Postfix ends it when the container stops. [Monitoring and alerts](monitoring.md#what-metrics_port-serves) describes what it does.
 
 ## What happens at each start
 
@@ -16,7 +17,7 @@ This page describes the design of docker-smtp-relay and what happens each time t
 3. With a login set, it writes the provider login to Postfix's lookup table and deletes the plaintext copy.
 4. It runs `newaliases`, `postfix check` and `postfix set-permissions`. A failed check or permission fix exits with code 1 and the reason in the log.
 5. With `STARTUP_PROBE` on, it checks that your provider's server answers on its port and logs the result. A failure only logs a warning, and mail queues.
-6. It logs `starting smtp-relay` with the queue depth left from the previous run, then hands over to Postfix.
+6. It logs `starting smtp-relay` with the queue depth left from the previous run. With `METRICS_PORT` set, it starts the queue reader. Then it hands over to Postfix.
 
 Each startup step that calls a Postfix tool has a 30-second limit, and the queue count has 5 seconds. A stuck disk cannot hold the start forever. A step that runs out of time logs `reason=timeout`. A stop request during startup ends the start cleanly within Docker's stop grace period.
 

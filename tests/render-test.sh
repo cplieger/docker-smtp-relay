@@ -351,29 +351,41 @@ check_master_cf metrics-leading-zero "$MASTER_SEED" "$GOLDEN_DIR/metrics.master.
   RELAY_HOST=email-smtp.us-east-1.amazonaws.com \
   METRICS_PORT=09154
 
-# The responder METRICS_PORT runs, under this shell and awk (BusyBox in the
-# image build), over a postqueue stub that replays two deferred messages. The
-# image build puts promtool on PATH, so its 0.0.4 parser always runs there.
+# The METRICS_PORT reader and responder, under this shell and awk (BusyBox in
+# the image build): one reader pass over a postqueue stub that replays two
+# deferred messages, then a scrape of the summary it wrote. A sleep stub ends
+# the reader with TERM on its second call. The image build puts promtool on
+# PATH, so its 0.0.4 parser always runs there.
 check_responder_exposition() {
   _tmp=$(mktemp -d)
-  mkdir "$_tmp/bin"
+  mkdir "$_tmp/bin" "$_tmp/run"
   {
     printf '#!/bin/sh\n'
     printf "printf '%%s\\\\n' '%s' '%s'\n" \
       '{"queue_name": "deferred", "queue_id": "4F1A2B3C4D", "arrival_time": 1000, "sender": "app@example.com", "recipients": []}' \
       '{"queue_name": "deferred", "queue_id": "5A1A2B3C4D", "arrival_time": 2000, "sender": "app@example.com", "recipients": []}'
   } >"$_tmp/bin/postqueue"
-  chmod 755 "$_tmp/bin/postqueue"
+  cat >"$_tmp/bin/sleep" <<'EOF'
+#!/bin/sh
+[ -e "$SLEPT" ] && kill -15 "$PPID"
+: >"$SLEPT"
+EOF
+  chmod 755 "$_tmp/bin/postqueue" "$_tmp/bin/sleep"
   printf 'version=v0.0.0\npostfix_version=3.11.7\n' >"$_tmp/build-info"
+  # The outer stderr only carries the shell's own "Terminated" notice.
+  (env -i PATH="$_tmp/bin:$PATH" SLEPT="$_tmp/slept" sh "$ENTRYPOINT_DIR/metrics-reader.sh" "$_tmp/run/queue-summary" 15 \
+    2>"$_tmp/reader.log" || exit $?) 2>/dev/null || :
   printf 'GET /metrics HTTP/1.1\r\nHost: relay\r\n\r\n' \
-    | env -i PATH="$_tmp/bin:$PATH" sh "$ENTRYPOINT_DIR/metrics-responder.sh" "$_tmp/build-info" >"$_tmp/reply"
+    | env -i PATH="$_tmp/bin:$PATH" sh "$ENTRYPOINT_DIR/metrics-responder.sh" "$_tmp/build-info" "$_tmp/run/queue-summary" 60 >"$_tmp/reply"
   sed '1,/^\r$/d' "$_tmp/reply" >"$_tmp/body"
   _deferred=$(awk '$1 == "smtp_relay_queue_messages{queue=\"deferred\"}" { print $2 }' "$_tmp/body")
   _age=$(awk '$1 == "smtp_relay_queue_oldest_message_age_seconds{queue=\"deferred\"}" { print $2 }' "$_tmp/body")
-  if [ "$_deferred" = 2 ] && [ "${_age:-0}" -gt 0 ]; then
+  _ok=$(awk '$1 == "smtp_relay_queue_scrape_ok" { print $2 }' "$_tmp/body")
+  if [ "$_deferred" = 2 ] && [ "${_age:-0}" -gt 0 ] && [ "$_ok" = 1 ]; then
     pass=$((pass + 1))
   else
-    printf 'FAIL responder-exposition: want 2 deferred and a positive age, got:\n%s\n' "$(cat "$_tmp/reply")" >&2
+    printf 'FAIL responder-exposition: want 2 deferred, a positive age and scrape_ok 1, got:\n%s\nreader log:\n%s\n' \
+      "$(cat "$_tmp/reply")" "$(cat "$_tmp/reader.log")" >&2
     fail=$((fail + 1))
   fi
   if command -v promtool >/dev/null 2>&1; then
@@ -385,6 +397,18 @@ check_responder_exposition() {
     fi
   else
     printf 'note: promtool is not on PATH, so the exposition parse runs only in the image build\n' >&2
+  fi
+  # A summary from a reader that stopped long ago must read as stale.
+  { printf '1\n' && sed 1d "$_tmp/run/queue-summary"; } >"$_tmp/run/stale"
+  printf 'GET /metrics HTTP/1.1\r\n\r\n' \
+    | env -i PATH="$PATH" sh "$ENTRYPOINT_DIR/metrics-responder.sh" "$_tmp/build-info" "$_tmp/run/stale" 60 \
+    | sed '1,/^\r$/d' >"$_tmp/stale-body"
+  if grep -qx 'smtp_relay_queue_scrape_ok 0' "$_tmp/stale-body" \
+    && ! grep -q '^smtp_relay_queue_messages' "$_tmp/stale-body"; then
+    pass=$((pass + 1))
+  else
+    printf 'FAIL responder-stale: an old summary was served as fresh:\n%s\n' "$(cat "$_tmp/stale-body")" >&2
+    fail=$((fail + 1))
   fi
   rm -rf "$_tmp"
 }

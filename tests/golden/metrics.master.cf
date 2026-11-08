@@ -11,5 +11,5 @@ smtp      unix  -       -       n       -       -       smtp
 # BEGIN METRICS_PORT service, rendered by entrypoint.sh at each start
 9154 inet n n n - 4 spawn
   -o command_time_limit=10s
-  user=smtp-metrics argv=/usr/local/bin/metrics-responder.sh /usr/share/smtp-relay/build-info
+  user=smtp-metrics argv=/usr/local/bin/metrics-responder.sh /usr/share/smtp-relay/build-info /run/smtp-relay/queue-summary 60
 # END METRICS_PORT service

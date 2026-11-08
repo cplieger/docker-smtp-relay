@@ -216,9 +216,6 @@ ARG PKG_REFRESH=static
 RUN echo "OS package refresh: ${PKG_REFRESH}" \
     && apk upgrade --no-cache \
     && apk add --no-cache \
-        # setfacl grants the METRICS_PORT responder queue access under
-        # no-new-privileges (entrypoint.sh sync_metrics_queue_access).
-        acl \
         ca-certificates \
         cyrus-sasl \
         cyrus-sasl-login \
@@ -232,7 +229,11 @@ RUN echo "OS package refresh: ${PKG_REFRESH}" \
     && adduser -S -u 100 -H -h /var/spool/postfix -G postfix -g postfix postfix \
     && addgroup postfix mail \
     # spawn(8) refuses to run the METRICS_PORT responder as root or the mail owner.
+    # postdrop stays a supplementary group: su gives it to the queue reader, and
+    # spawn(8) sets only the primary group, so the responder never holds it.
     && adduser -S -u 103 -H -h /var/empty -s /sbin/nologin -G nogroup smtp-metrics \
+    && addgroup smtp-metrics postdrop \
+    && install -d -m 700 -o smtp-metrics -g nogroup /run/smtp-relay \
     # data_directory starts empty, so create it with the apk package's
     # ownership/mode (postfix:root 700); a COPY of the empty staged dir would land
     # root-owned 755 and postfix would warn until set-permissions runs.
@@ -267,7 +268,7 @@ FROM prom/prometheus:v3.16.0@sha256:e04987641b57704f408e31f6373ba4138ecf27cb4a16
 FROM base AS test
 SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 ARG POSTFIX_VERSION
-COPY --chmod=755 validate.sh recipient-filter.sh entrypoint.sh metrics-responder.sh /usr/local/bin/
+COPY --chmod=755 validate.sh recipient-filter.sh entrypoint.sh metrics-reader.sh metrics-responder.sh /usr/local/bin/
 COPY --from=promtool /bin/promtool /usr/local/bin/promtool
 COPY tests/render-test.sh /tmp/tests/render-test.sh
 COPY tests/golden/ /tmp/tests/golden/
@@ -315,8 +316,21 @@ RUN command -v promtool >/dev/null \
       || { printf '%s\n' 'FAIL: /usr/sbin/postdrop lost its setgid bit' >&2; exit 1; }; } \
     && { test -g /usr/sbin/postqueue \
       || { printf '%s\n' 'FAIL: /usr/sbin/postqueue lost its setgid bit' >&2; exit 1; }; } \
-    && { command -v setfacl >/dev/null \
-      || { printf '%s\n' 'FAIL: setfacl is missing; METRICS_PORT cannot read the queue under no-new-privileges' >&2; exit 1; }; } \
+    # METRICS_PORT reads the queue through group membership, which works on
+    # every spool filesystem, so no POSIX ACL tool ships.
+    && { ! command -v setfacl >/dev/null \
+      || { printf '%s\n' 'FAIL: setfacl is in the image' >&2; exit 1; }; } \
+    && { ! grep -q '^acl' /usr/share/licenses/APK-MANIFEST \
+      || { printf '%s\n' 'FAIL: licenses/APK-MANIFEST lists an acl package' >&2; exit 1; }; } \
+    && reader_groups=" $(su -s /bin/sh smtp-metrics -c 'id -G') " \
+    && case "$reader_groups" in \
+         *" $(getent group postdrop | cut -d: -f3) "*) ;; \
+         *) printf 'FAIL: su does not give smtp-metrics the postdrop group (groups:%s)\n' "$reader_groups" >&2; exit 1 ;; \
+       esac \
+    && { [ "$(id -g smtp-metrics)" != "$(getent group postdrop | cut -d: -f3)" ] \
+      || { printf '%s\n' 'FAIL: postdrop is the primary group of smtp-metrics, which spawn(8) would give the responder' >&2; exit 1; }; } \
+    && { [ "$(stat -c '%U %a' /run/smtp-relay)" = 'smtp-metrics 700' ] \
+      || { printf 'FAIL: /run/smtp-relay is %s, not smtp-metrics 700\n' "$(stat -c '%U %a' /run/smtp-relay)" >&2; exit 1; }; } \
     # Turns silent hardening regressions (a toolchain or makedefs change) into
     # build failures. pax-utils (scanelf) is test-stage-only and never ships. If a
     # strip or UPX step is ever added, keep the symbol check before strip and the
@@ -378,7 +392,7 @@ RUN command -v promtool >/dev/null \
     && postfix check \
     && metrics_entry=$(postconf -M 9154/inet) \
     && case "$metrics_entry" in \
-         *' spawn '*'user=smtp-metrics argv=/usr/local/bin/metrics-responder.sh /usr/share/smtp-relay/build-info'*) ;; \
+         *' spawn '*'user=smtp-metrics argv=/usr/local/bin/metrics-responder.sh /usr/share/smtp-relay/build-info /run/smtp-relay/queue-summary 60'*) ;; \
          *) printf 'FAIL: postconf -M does not show the rendered METRICS_PORT service: %s\n' "$metrics_entry" >&2; exit 1 ;; \
        esac \
     && env CONF_DIR=/etc/postfix RELAY_HOST=smtp.example.com \
@@ -393,7 +407,7 @@ RUN command -v promtool >/dev/null \
 # default target, produces it.
 FROM base AS final
 
-COPY --chmod=755 validate.sh recipient-filter.sh entrypoint.sh metrics-responder.sh /usr/local/bin/
+COPY --chmod=755 validate.sh recipient-filter.sh entrypoint.sh metrics-reader.sh metrics-responder.sh /usr/local/bin/
 
 # The METRICS_PORT responder reads this for smtp_relay_build_info. The release
 # workflow passes the image tag as BUILD_VERSION.

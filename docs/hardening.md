@@ -41,14 +41,7 @@ The container runs as root, because Postfix's master process needs root to liste
       - "no-new-privileges:true"
 ```
 
-This option stops `postqueue` from gaining the `postdrop` group, which the `METRICS_PORT` page needs to read the queue. With `METRICS_PORT` set, the relay therefore gives the page's user, `smtp-metrics`, search access to `/var/spool/postfix/public` with a POSIX ACL entry, and removes the entry once the page no longer needs it.
-
-Some filesystems refuse POSIX ACLs, ZFS with NFSv4 ACLs for one. On a spool folder there, the relay logs a warning and every scrape reports `smtp_relay_queue_scrape_ok 0`. To fix it, mount a tmpfs on `/var/spool/postfix/public`, which holds only the sockets Postfix creates at each start:
-
-```yaml
-    tmpfs:
-      - "/var/spool/postfix/public"
-```
+This option stops `postqueue` from gaining the `postdrop` group through its setgid bit, and `METRICS_PORT` needs that group to read the queue. With `METRICS_PORT` set, the relay therefore starts its queue reader as the unprivileged `smtp-metrics` user with `postdrop` as an extra group. A group a process holds from its start survives no-new-privileges, so this works on any spool filesystem. The reader opens no port. The page on `METRICS_PORT` runs as `smtp-metrics` without `postdrop`, because that group can also put mail straight into the queue, past the checks port 25 applies. The page only reads the summary the reader writes.
 
 ## Accepted scanner findings
 

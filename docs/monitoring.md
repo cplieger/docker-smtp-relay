@@ -22,6 +22,14 @@ The healthcheck only shows that Postfix answers on port 25. A wrong login or TLS
 
 The startup check, `STARTUP_PROBE`, opens a plain TCP connection to `RELAY_HOST` on `RELAY_PORT` and logs `upstream relay reachable` or `upstream relay unreachable at startup; continuing (mail will queue)`. It catches a wrong host name, a wrong port, a routing problem or a firewall at deploy time. It never tests the login or the TLS certificate, which only a real send can prove, and a failure never stops the start.
 
+## What `METRICS_PORT` serves
+
+With `METRICS_PORT` set, the relay starts one background process, the queue reader, just before Postfix. Every 15 seconds it runs `postqueue -j` and writes a summary of the queue to a file: how many messages wait in each queue and how long the oldest deferred one has waited. The page Postfix serves on `METRICS_PORT` returns that summary, so a scrape never walks the queue itself. A scrape interval shorter than 15 seconds only reads the same summary again.
+
+The reader runs as the unprivileged `smtp-metrics` user with the `postdrop` group, the group `postqueue` needs to reach Postfix's queue service. Under no-new-privileges `postqueue` cannot gain that group on its own, so the reader holds it from its start. The page itself runs without `postdrop`, as [Security](hardening.md#privileges-and-the-hardened-compose-settings) explains.
+
+`smtp_relay_queue_scrape_ok` is 1 while the summary is at most 60 seconds old, which allows one failed read. Otherwise it is 0 and the page leaves out the queue series, so an old count is never reported. Nothing restarts a reader that stops; `SmtpRelayDown` fires once `smtp_relay_queue_scrape_ok` has stayed 0 for 5 minutes, and a restart of the container starts a new reader. A reader that cannot read the queue logs `METRICS_PORT queue reader cannot read the queue` once, with `postqueue`'s exit status, and `reads the queue again` when it recovers. Right after a start the page reports 0 until the first read, 15 seconds in.
+
 ## Alerting
 
 The rules are in [`alerts/`](../alerts/). [`alerts/logql.yaml`](../alerts/logql.yaml) is for Loki's ruler and reads Postfix's own delivery lines. [`alerts/promql.yaml`](../alerts/promql.yaml) is for Prometheus, Mimir or vmalert and reads the page `METRICS_PORT` serves, scraped as job `smtp-relay`. Load them as [Loading an app's alert rules](https://github.com/cplieger/docs/blob/main/docs/monitoring.md#loading-an-apps-alert-rules) shows.
@@ -30,7 +38,7 @@ The rules are in [`alerts/`](../alerts/). [`alerts/logql.yaml`](../alerts/logql.
 | --- | --- | --- | --- |
 | `SmtpRelayMailStuck` | the oldest deferred message arrived more than 30 minutes ago | warning | both |
 | `SmtpRelayMailBounced` | your provider refused a message for good in the last 15 minutes | warning | `logql.yaml`, group `smtp-relay-events` |
-| `SmtpRelayDown` | the `smtp-relay` scrape has failed for 5 minutes | warning | `promql.yaml` |
+| `SmtpRelayDown` | the `smtp-relay` scrape has failed, or the page has not had a fresh queue summary, for 5 minutes | warning | `promql.yaml` |
 
 `alerts/logql.yaml` has two groups. `smtp-relay-state` holds `SmtpRelayMailStuck`, and `smtp-relay-events` holds `SmtpRelayMailBounced`. Load the `smtp-relay-events` group always, because a bounce has no metric. Load `smtp-relay-state` only if you do not load `alerts/promql.yaml`, or `SmtpRelayMailStuck` fires twice.
 

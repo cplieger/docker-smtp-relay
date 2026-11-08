@@ -4,6 +4,7 @@
 !entrypoint.sh
 !validate.sh
 !recipient-filter.sh
+!metrics-reader.sh
 !metrics-responder.sh
 !LICENSE
 !NOTICE

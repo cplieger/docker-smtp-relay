@@ -547,14 +547,23 @@ compute_metrics_port() {
 readonly METRICS_BLOCK_BEGIN='# BEGIN METRICS_PORT service, rendered by entrypoint.sh at each start'
 readonly METRICS_BLOCK_END='# END METRICS_PORT service'
 
+readonly METRICS_SUMMARY=/run/smtp-relay/queue-summary
+# One pass per 15 s, the scrape interval docs/monitoring.md assumes. The bound
+# covers one failed pass: two intervals plus the reader's 10 s postqueue limit
+# and its kill grace come to 54 s.
+readonly METRICS_READ_INTERVAL=15
+readonly METRICS_SUMMARY_MAX_AGE=60
+
 # spawn(8) runs the responder once per connection and kills it after
-# command_time_limit. It refuses root and the mail owner, hence the user.
+# command_time_limit. It refuses root and the mail owner, hence the user, and
+# sets only that user's primary group (set_ugid.c), so the responder never
+# holds postdrop.
 emit_metrics_service() {
   cat <<EOF
 ${METRICS_BLOCK_BEGIN}
 ${METRICS_PORT_VALUE} inet n n n - 4 spawn
   -o command_time_limit=10s
-  user=smtp-metrics argv=/usr/local/bin/metrics-responder.sh /usr/share/smtp-relay/build-info
+  user=smtp-metrics argv=/usr/local/bin/metrics-responder.sh /usr/share/smtp-relay/build-info ${METRICS_SUMMARY} ${METRICS_SUMMARY_MAX_AGE}
 ${METRICS_BLOCK_END}
 EOF
 }
@@ -790,31 +799,15 @@ run_postfix_checks() {
   fi
 }
 
-no_new_privs() {
-  awk '$1 == "NoNewPrivs:" { set = ($2 == 1) } END { exit !set }' "$1" 2>/dev/null
-}
-
-# Only group postdrop may search public/, where the responder reaches showq.
-# Under no-new-privileges postqueue's setgid bit is ignored. Running the
-# responder as group postdrop would give it maildrop and every public/ service,
-# and Postfix's development line refuses that user= in spawn(8), so this POSIX
-# ACL entry is the grant. It survives the 0710 chmod of `postfix
-# set-permissions`; setfacl -x exits 0 with no entry.
-sync_metrics_queue_access() {
-  _mqa_status=0
-  if [ -n "$METRICS_PORT_VALUE" ] && no_new_privs /proc/self/status; then
-    run_bounded setfacl -m u:smtp-metrics:--x /var/spool/postfix/public || _mqa_status=$?
-    if [ "$_mqa_status" -ne 0 ]; then
-      printf 'level=warn msg="cannot grant the METRICS_PORT responder access to the queue under no-new-privileges; scrapes will report smtp_relay_queue_scrape_ok 0" path="/var/spool/postfix/public"%s\n' \
-        "$(timeout_log_fields "$_mqa_status")" >&2
-    fi
-    return 0
-  fi
-  run_bounded setfacl -x u:smtp-metrics /var/spool/postfix/public || _mqa_status=$?
-  if [ "$_mqa_status" -ne 0 ]; then
-    printf 'level=warn msg="cannot remove the METRICS_PORT responder queue access entry" path="/var/spool/postfix/public"%s\n' \
-      "$(timeout_log_fields "$_mqa_status")" >&2
-  fi
+# BusyBox su gives the reader smtp-metrics' groups from /etc/group, postdrop
+# among them. A group held from the start survives no-new-privileges, unlike the
+# one postqueue's setgid bit would add. As PID 1, master(8) inherits the
+# reader, reaps it if it dies and TERMs it at stop (master_spawn.c, master_sig.c).
+start_metrics_reader() {
+  [ -n "$METRICS_PORT_VALUE" ] || return 0
+  # shellcheck disable=SC2016 # $0 and $1 are the reader shell's arguments.
+  su -s /bin/sh smtp-metrics -c 'exec /usr/local/bin/metrics-reader.sh "$0" "$1"' \
+    "$METRICS_SUMMARY" "$METRICS_READ_INTERVAL" &
 }
 
 # Fail-soft: a failure warns and returns 0 so mail still queues (the relay may be
@@ -965,9 +958,9 @@ case "$MODE" in
     # startup step added below that reads them aborts PID 1.
     unset RELAY_PASSWORD RELAY_LOGIN
     run_postfix_checks
-    sync_metrics_queue_access
     probe_upstream
     log_startup
+    start_metrics_reader
     # The startup trap stays armed through exec: clearing it here would open a
     # TERM-loss window, and exec resets signal dispositions for Postfix anyway.
     exec postfix start-fg

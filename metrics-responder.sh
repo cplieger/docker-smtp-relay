@@ -1,50 +1,26 @@
 #!/bin/sh
-# Answers one HTTP request with the Postfix queue in the Prometheus text format.
-# spawn(8) runs it per connection, with the client on stdin, stdout and stderr,
-# no PATH (only export_environment is passed) and a time limit set in master.cf.
-# $1 is the build-info file, `key=value` lines for version and postfix_version.
+# Answers one HTTP request with the queue summary metrics-reader.sh writes, in
+# the Prometheus text format. spawn(8) runs it per connection, with the client on
+# stdin, stdout and stderr, no PATH (only export_environment is passed) and a
+# time limit set in master.cf. $1 is the build-info file, `key=value` lines for
+# version and postfix_version; $2 the summary; $3 its maximum age in seconds.
 set -u
 : "${PATH:=/usr/sbin:/usr/bin:/sbin:/bin}"
 export PATH
 # stderr is the client's socket too: a diagnostic there would corrupt the reply.
 exec 2>/dev/null
 
-readonly SCRAPE_OK_MARKER='smtp-relay-scrape-ok'
-
-# queue_lines -- `postqueue -j` output, then SCRAPE_OK_MARKER only if it exited 0,
-# so queue_metrics never reports a failed read as an empty queue.
-queue_lines() {
-  postqueue -j && printf '%s\n' "$SCRAPE_OK_MARKER"
-}
-
-# queue_metrics NOW -- stdin: queue_lines. A JSON string escapes its quotes, so
-# no sender or recipient can forge the `"queue_name": "` key (postqueue(1)).
-queue_metrics() {
-  awk -v now="$1" -v marker="$SCRAPE_OK_MARKER" '
-    $0 == marker { ok = 1; next }
-    match($0, /"queue_name": *"[a-z]+"/) {
-      q = substr($0, RSTART, RLENGTH)
-      sub(/^"queue_name": *"/, "", q)
-      sub(/"$/, "", q)
-      count[q]++
-      if (q == "deferred" && match($0, /"arrival_time": *[0-9]+/)) {
-        t = substr($0, RSTART, RLENGTH)
-        sub(/^"arrival_time": */, "", t)
-        if (oldest == "" || t + 0 < oldest + 0) oldest = t
-      }
-    }
+# summary_metrics NOW MAX_AGE -- stdin: the summary metrics-reader.sh wrote. Its
+# first line is the time of the read; its series pass through only while that
+# is at most MAX_AGE seconds before NOW.
+summary_metrics() {
+  awk -v now="$1" -v max="$2" '
+    NR == 1 { t = $0; next }
+    { lines[++n] = $0 }
     END {
-      if (ok) {
-        print "# HELP smtp_relay_queue_messages Messages in each Postfix queue."
-        print "# TYPE smtp_relay_queue_messages gauge"
-        n = split("active deferred hold incoming maildrop", names, " ")
-        for (i = 1; i <= n; i++) printf "smtp_relay_queue_messages{queue=\"%s\"} %d\n", names[i], count[names[i]]
-        age = (oldest == "") ? 0 : now - oldest
-        print "# HELP smtp_relay_queue_oldest_message_age_seconds Seconds since the oldest deferred message arrived, 0 when none is deferred."
-        print "# TYPE smtp_relay_queue_oldest_message_age_seconds gauge"
-        printf "smtp_relay_queue_oldest_message_age_seconds{queue=\"deferred\"} %d\n", age
-      }
-      print "# HELP smtp_relay_queue_scrape_ok 1 when postqueue -j read the queue, 0 when it failed."
+      ok = (now - t <= max + 0)
+      if (ok) for (i = 1; i <= n; i++) print lines[i]
+      print "# HELP smtp_relay_queue_scrape_ok 1 when the queue reader read the queue recently enough, 0 when its summary is stale or missing."
       print "# TYPE smtp_relay_queue_scrape_ok gauge"
       printf "smtp_relay_queue_scrape_ok %d\n", ok
     }'
@@ -89,7 +65,11 @@ main() {
       return 0
       ;;
   esac
-  _body="$(queue_lines | queue_metrics "$(date +%s)")
+  # The reader replaces the summary by rename, so one open sees one whole
+  # summary. A missing one reads as stale.
+  _summary=/dev/null
+  [ ! -r "$2" ] || _summary=$2
+  _body="$(summary_metrics "$(date +%s)" "$3" <"$_summary")
 $(build_info "$1")
 "
   respond '200 OK' 'text/plain; version=0.0.4; charset=utf-8' "$_body"

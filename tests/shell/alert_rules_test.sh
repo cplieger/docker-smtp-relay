@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # alerts/: the alert names the rule files define, and the series the PromQL
-# rules read, checked against what the shipped metrics-responder.sh prints.
-#
-# A PromQL rule over a series the responder no longer prints never fires and
-# never errors, so each metric name in alerts/promql.yaml (functions, keywords
-# and `up`, which Prometheus writes for every scrape, aside) must appear as a
-# sample in a real scrape, with every `label="value"` matcher the rule uses. The
-# scrape runs the shipped responder over a postqueue stub holding one message in
-# every queue. KNOWN lists every alert name ever released, so adding or dropping
-# a condition is a decision made in this file.
+# rules read, checked against what the shipped metrics-reader.sh and
+# metrics-responder.sh print.
+
+# A PromQL rule over a series the page no longer prints never fires and never
+# errors, so each metric name in alerts/promql.yaml (functions, keywords and
+# `up`, which Prometheus writes, aside) must appear in a real scrape with every
+# `label="value"` matcher the rule uses: the reader makes one pass over a
+# postqueue stub holding one message in every queue, and the responder serves
+# its summary. KNOWN lists every alert name ever released, so adding or
+# dropping a condition is a decision made in this file.
 # shellcheck disable=SC2015
 set -u
 
@@ -18,8 +19,9 @@ new_workdir >/dev/null
 
 PROMQL="$REPO_ROOT/alerts/promql.yaml"
 LOGQL="$REPO_ROOT/alerts/logql.yaml"
+READER="$REPO_ROOT/metrics-reader.sh"
 RESPONDER="$REPO_ROOT/metrics-responder.sh"
-for f in "$PROMQL" "$LOGQL" "$RESPONDER"; do
+for f in "$PROMQL" "$LOGQL" "$READER" "$RESPONDER"; do
   [ -f "$f" ] || {
     printf 'harness error: missing %s\n' "$f" >&2
     exit 1
@@ -65,10 +67,22 @@ for q in active deferred hold incoming maildrop; do
   printf '{"queue_name": "%s", "queue_id": "4F1A2B3C4D", "arrival_time": 1000, "sender": "app@example.com", "recipients": []}\n' "$q"
 done
 EOF
-chmod +x "$STUB/postqueue"
+# Ends the reader with TERM on its second call, after one pass.
+cat >"$STUB/sleep" <<'EOF'
+#!/bin/sh
+[ -e "$SLEPT" ] && kill -15 "$PPID"
+: >"$SLEPT"
+EOF
+chmod +x "$STUB/postqueue" "$STUB/sleep"
 printf 'version=v0.0.0\npostfix_version=3.11.7\n' >"$WORK/build-info"
-printf 'GET /metrics HTTP/1.1\r\n\r\n' | PATH="$STUB:$PATH" sh "$RESPONDER" "$WORK/build-info" \
+# The outer stderr only carries bash's own "Terminated" notice.
+(SLEPT="$WORK/slept" PATH="$STUB:$PATH" timeout -k 2 20 sh "$READER" "$WORK/queue-summary" 15 || exit $?) 2>/dev/null
+printf 'GET /metrics HTTP/1.1\r\n\r\n' | PATH="$STUB:$PATH" sh "$RESPONDER" "$WORK/build-info" "$WORK/queue-summary" 60 \
   | sed '1,/^\r$/d' | grep -v '^#' >"$WORK/samples"
+grep -qx 'smtp_relay_queue_scrape_ok 1' "$WORK/samples" || {
+  printf 'harness error: the scrape did not serve a fresh summary\n%s\n' "$(cat "$WORK/samples")" >&2
+  exit 1
+}
 [ -s "$WORK/samples" ] || {
   printf 'harness error: the responder printed no samples\n' >&2
   exit 1

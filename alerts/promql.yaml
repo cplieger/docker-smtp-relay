@@ -10,21 +10,27 @@
 groups:
   - name: smtp-relay
     rules:
-      # Two arms, because neither covers the other: `up == 0` catches a target
-      # that fails its scrape and keeps its labels, `absent(up{...})` catches a
-      # target that is gone. Use an exact job matcher, never a regex.
+      # Three arms, because none covers another: `up == 0` catches a target
+      # that fails its scrape and keeps its labels, `absent(up{...})` a target
+      # that is gone, and `smtp_relay_queue_scrape_ok == 0` a page that still
+      # answers while its queue reader has stopped or cannot read the queue.
+      # The queue series vanish then, so SmtpRelayMailStuck cannot fire. Use
+      # an exact job matcher on `up`, never a regex.
       - alert: SmtpRelayDown
-        expr: up{job="smtp-relay"} == 0 or absent(up{job="smtp-relay"})
+        expr: up{job="smtp-relay"} == 0 or absent(up{job="smtp-relay"}) or smtp_relay_queue_scrape_ok == 0
         for: 5m
         labels:
           severity: warning
         annotations:
-          summary: "docker-smtp-relay is not being scraped"
+          summary: "docker-smtp-relay is down or cannot read its queue"
           description: >-
-            No successful scrape of METRICS_PORT for 5m: the container is
-            stopped or restarting, Postfix's master process is down, or the
-            scrape cannot reach the port. A wedged smtpd still answers this
-            scrape; an outside probe of port 25 sees it.
+            For 5m the METRICS_PORT scrape has failed or reported
+            smtp_relay_queue_scrape_ok 0. A failed scrape means the container
+            is stopped or restarting, Postfix's master process is down, or the
+            scrape cannot reach the port. A scrape_ok of 0 means the background
+            queue reader has stopped or cannot read the queue; the container
+            log says which. A wedged smtpd still answers this scrape; an
+            outside probe of port 25 sees it.
       - alert: SmtpRelayMailStuck
         expr: smtp_relay_queue_oldest_message_age_seconds{queue="deferred"} > 1800
         for: 5m
