@@ -11,9 +11,10 @@
 #     spool, an unreadable temp file or a failed cleanup are all conditions of the
 #     VOLUME, not of the relay; any of them killing the container would trade a
 #     working relay for a restart loop.
-#   - Reporting a fabricated zero. Grafana reads queue_active/queue_deferred from
-#     this line; a failed scan presented as an authoritative 0 during a real spool
-#     fault is worse than no metric, so the count travels with queue_scan_ok.
+#   - Reporting a fabricated zero. A reader checks queue_active and queue_deferred
+#     on this line after a restart; a failed scan presented as an authoritative 0
+#     during a real spool fault is worse than no count, so the count travels with
+#     queue_scan_ok.
 #
 # THE ORACLE IS A FRESH `set -euf` CHILD, exactly like production. An in-process
 # `count_queue ... || rc=$?` cannot demonstrate fail-softness: the `||` suppresses

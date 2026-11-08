@@ -120,13 +120,13 @@ Every 30 seconds, the healthcheck checks that Postfix answers on port 25 with it
 
 ## Monitoring
 
-The relay has no metrics endpoint. Postfix logs every delivery attempt to the container log with `status=sent`, `status=deferred` or `status=bounced`, and the startup lines are `level=... msg=...` pairs. [Monitoring and alerts](docs/monitoring.md) explains the lines and has a Loki alert rule for failing delivery.
+The relay has no metrics endpoint. Postfix logs every delivery attempt to the container log with `status=sent`, `status=deferred` or `status=bounced`, and the startup lines are `level=... msg=...` pairs. Alert rules for Loki ship in [`alerts/`](alerts/), and [Monitoring and alerts](docs/monitoring.md) explains the lines, which rules to load and why alerts about the relay should not travel by email.
 
 ## Documentation
 
 - [Configuration](docs/configuration.md) lists every setting, with the TLS levels, inbound TLS and recipient filtering.
 - [Security](docs/hardening.md) covers network exposure, the hardened compose settings and what the image contains.
-- [Monitoring and alerts](docs/monitoring.md) explains the log lines and the alert rule.
+- [Monitoring and alerts](docs/monitoring.md) explains the log lines and the alert rules.
 - [How docker-smtp-relay works](docs/how-it-works.md) describes the design and what happens at each start.
 
 ## Credits
