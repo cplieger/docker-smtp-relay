@@ -228,6 +228,12 @@ RUN echo "OS package refresh: ${PKG_REFRESH}" \
     && addgroup -S -g 102 postdrop \
     && adduser -S -u 100 -H -h /var/spool/postfix -G postfix -g postfix postfix \
     && addgroup postfix mail \
+    # spawn(8) refuses to run the METRICS_PORT responder as root or the mail owner.
+    # postdrop stays a supplementary group: su gives it to the queue reader, and
+    # spawn(8) sets only the primary group, so the responder never holds it.
+    && adduser -S -u 103 -H -h /var/empty -s /sbin/nologin -G nogroup smtp-metrics \
+    && addgroup smtp-metrics postdrop \
+    && install -d -m 700 -o smtp-metrics -g nogroup /run/smtp-relay \
     # data_directory starts empty, so create it with the apk package's
     # ownership/mode (postfix:root 700); a COPY of the empty staged dir would land
     # root-owned 755 and postfix would warn until set-permissions runs.
@@ -250,6 +256,10 @@ COPY licenses/ /usr/share/licenses/
 RUN ln -f /usr/sbin/sendmail /usr/bin/newaliases \
     && ln -f /usr/sbin/sendmail /usr/bin/mailq
 
+# promtool's text-format parser checks the METRICS_PORT exposition in the test
+# stage and in tests/image-smoke.conf, which reads this reference. Never shipped.
+FROM prom/prometheus:v3.16.0@sha256:e04987641b57704f408e31f6373ba4138ecf27cb4a165d24aabb6c38fddd0f06 AS promtool
+
 # Test stage - runs the golden-file config tests and asserts the source-built
 # Postfix at build time. A failure fails the build. hash: and btree: are
 # deliberately NOT asserted present: postconf -m lists them but -DNO_DB makes
@@ -258,10 +268,12 @@ RUN ln -f /usr/sbin/sendmail /usr/bin/newaliases \
 FROM base AS test
 SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 ARG POSTFIX_VERSION
-COPY --chmod=755 validate.sh recipient-filter.sh entrypoint.sh /usr/local/bin/
+COPY --chmod=755 validate.sh recipient-filter.sh entrypoint.sh metrics-reader.sh metrics-responder.sh /usr/local/bin/
+COPY --from=promtool /bin/promtool /usr/local/bin/promtool
 COPY tests/render-test.sh /tmp/tests/render-test.sh
 COPY tests/golden/ /tmp/tests/golden/
-RUN ENTRYPOINT_DIR=/usr/local/bin sh /tmp/tests/render-test.sh \
+RUN command -v promtool >/dev/null \
+    && ENTRYPOINT_DIR=/usr/local/bin sh /tmp/tests/render-test.sh \
     && { test "$(postconf -h mail_version)" = "${POSTFIX_VERSION#v}" \
       || { printf 'FAIL: mail_version %s does not match pinned %s\n' \
              "$(postconf -h mail_version)" "${POSTFIX_VERSION#v}" >&2; exit 1; }; } \
@@ -304,6 +316,21 @@ RUN ENTRYPOINT_DIR=/usr/local/bin sh /tmp/tests/render-test.sh \
       || { printf '%s\n' 'FAIL: /usr/sbin/postdrop lost its setgid bit' >&2; exit 1; }; } \
     && { test -g /usr/sbin/postqueue \
       || { printf '%s\n' 'FAIL: /usr/sbin/postqueue lost its setgid bit' >&2; exit 1; }; } \
+    # METRICS_PORT reads the queue through group membership, which works on
+    # every spool filesystem, so no POSIX ACL tool ships.
+    && { ! command -v setfacl >/dev/null \
+      || { printf '%s\n' 'FAIL: setfacl is in the image' >&2; exit 1; }; } \
+    && { ! grep -q '^acl' /usr/share/licenses/APK-MANIFEST \
+      || { printf '%s\n' 'FAIL: licenses/APK-MANIFEST lists an acl package' >&2; exit 1; }; } \
+    && reader_groups=" $(su -s /bin/sh smtp-metrics -c 'id -G') " \
+    && case "$reader_groups" in \
+         *" $(getent group postdrop | cut -d: -f3) "*) ;; \
+         *) printf 'FAIL: su does not give smtp-metrics the postdrop group (groups:%s)\n' "$reader_groups" >&2; exit 1 ;; \
+       esac \
+    && { [ "$(id -g smtp-metrics)" != "$(getent group postdrop | cut -d: -f3)" ] \
+      || { printf '%s\n' 'FAIL: postdrop is the primary group of smtp-metrics, which spawn(8) would give the responder' >&2; exit 1; }; } \
+    && { [ "$(stat -c '%U %a' /run/smtp-relay)" = 'smtp-metrics 700' ] \
+      || { printf 'FAIL: /run/smtp-relay is %s, not smtp-metrics 700\n' "$(stat -c '%U %a' /run/smtp-relay)" >&2; exit 1; }; } \
     # Turns silent hardening regressions (a toolchain or makedefs change) into
     # build failures. pax-utils (scanelf) is test-stage-only and never ships. If a
     # strip or UPX step is ever added, keep the symbol check before strip and the
@@ -357,15 +384,38 @@ RUN ENTRYPOINT_DIR=/usr/local/bin sh /tmp/tests/render-test.sh \
       || { printf 'FAIL: lookup through the rendered map spec %s did not return the credential verbatim (got %s)\n' \
              "$sasl_spec" "$(postmap -q smtp.example.com "$sasl_spec" 2>&1)" >&2; exit 1; }; } \
     && rm -f "${sasl_spec#*:}" "${sasl_spec#*:}".lmdb "${sasl_spec#*:}".db \
+    # The METRICS_PORT service must pass postfix check against the stock
+    # master.cf, and a render without it must restore that file byte for byte.
+    && cp /etc/postfix/master.cf /tmp/master.cf.stock \
+    && env CONF_DIR=/etc/postfix RELAY_HOST=smtp.example.com METRICS_PORT=9154 \
+        sh /usr/local/bin/entrypoint.sh render \
+    && postfix check \
+    && metrics_entry=$(postconf -M 9154/inet) \
+    && case "$metrics_entry" in \
+         *' spawn '*'user=smtp-metrics argv=/usr/local/bin/metrics-responder.sh /usr/share/smtp-relay/build-info /run/smtp-relay/queue-summary 60'*) ;; \
+         *) printf 'FAIL: postconf -M does not show the rendered METRICS_PORT service: %s\n' "$metrics_entry" >&2; exit 1 ;; \
+       esac \
+    && env CONF_DIR=/etc/postfix RELAY_HOST=smtp.example.com \
+        sh /usr/local/bin/entrypoint.sh render \
+    && { cmp /tmp/master.cf.stock /etc/postfix/master.cf \
+      || { printf '%s\n' 'FAIL: a render without METRICS_PORT left master.cf different from the stock file' >&2; exit 1; }; } \
     && rm -f /tmp/sasl-probe /tmp/sasl-probe.lmdb /tmp/map-types \
-        /tmp/sasl-client-types /tmp/smtpd-libs \
+        /tmp/sasl-client-types /tmp/smtpd-libs /tmp/master.cf.stock \
     && touch /tmp/tests-passed
 
 # Must remain the last stage so the centralized CI build-gate, which builds the
 # default target, produces it.
 FROM base AS final
 
-COPY --chmod=755 validate.sh recipient-filter.sh entrypoint.sh /usr/local/bin/
+COPY --chmod=755 validate.sh recipient-filter.sh entrypoint.sh metrics-reader.sh metrics-responder.sh /usr/local/bin/
+
+# The METRICS_PORT responder reads this for smtp_relay_build_info. The release
+# workflow passes the image tag as BUILD_VERSION.
+ARG POSTFIX_VERSION
+ARG BUILD_VERSION=dev
+RUN mkdir -p /usr/share/smtp-relay \
+    && printf 'version=%s\npostfix_version=%s\n' "$BUILD_VERSION" "${POSTFIX_VERSION#v}" \
+        >/usr/share/smtp-relay/build-info
 
 # A 0-byte marker from the test stage, so building `final` forces the build-time
 # golden tests to run and pass first. The tests/ tree never reaches the runtime image.

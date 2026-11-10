@@ -5,17 +5,15 @@
 # `tests/shell/run.sh` when it exists, and skips otherwise, so a repo opts into
 # shell unit testing by committing this file. Keep the name. The hook tests -f and
 # invokes it through `bash`, so the exec bit is not load-bearing.
-#
-# SCOPE. The shipped shell is THREE files — entrypoint.sh (PID 1, modes
-# run|render) plus the sourced validate.sh and recipient-filter.sh — and the other
-# two harnesses reach only part of it. image-smoke.sh asserts the image boots, so
-# it never takes a failure branch. render-test.sh drives `entrypoint.sh render`,
-# which stops at two hard edges: render mode returns before the whole run-mode half
-# (the SASL secret write and its postmap, the upstream TCP probe, queue telemetry,
-# startup timeout accounting), and a process-level harness sees only ONE exit 2 for
-# a validator that refuses on seven distinct arms. These tests take the other side
-# of both edges.
-#
+
+# SCOPE. The shipped shell is entrypoint.sh (PID 1, modes run|render), the sourced
+# validate.sh and recipient-filter.sh, and METRICS_PORT's metrics-reader.sh and
+# metrics-responder.sh. image-smoke.sh asserts the image boots, so it never takes
+# a failure branch. render-test.sh drives `entrypoint.sh render`, which returns
+# before the run-mode half (the SASL secret write, the upstream probe, queue
+# telemetry, startup timeouts) and sees one exit 2 for a validator that refuses
+# on seven arms. These tests take the other side of both edges.
+
 # Each *_test.sh is a separate process, so one test's stubs, traps and shell
 # options cannot leak into another's. All run even when an early one fails.
 set -u

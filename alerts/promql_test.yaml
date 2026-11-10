@@ -1,0 +1,126 @@
+# promtool test rules alerts/promql_test.yaml
+rule_files:
+  - promql.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # A target that fails its scrape keeps its labels, so the alert carries them.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="smtp-relay", instance="relay:9154"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: SmtpRelayDown
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: SmtpRelayDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: smtp-relay
+              instance: relay:9154
+            exp_annotations:
+              summary: "docker-smtp-relay is down or cannot read its queue"
+              description: "For 5m the METRICS_PORT scrape failed or reported smtp_relay_queue_scrape_ok 0. A failed scrape means the container, Postfix or network path is down; scrape_ok 0 means the reader stopped or cannot read the queue; the container log names a read failure."
+
+  # A target that is gone entirely leaves no up series; the absent arm fires.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="other", instance="other:9100"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: SmtpRelayDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: smtp-relay
+            exp_annotations:
+              summary: "docker-smtp-relay is down or cannot read its queue"
+              description: "For 5m the METRICS_PORT scrape failed or reported smtp_relay_queue_scrape_ok 0. A failed scrape means the container, Postfix or network path is down; scrape_ok 0 means the reader stopped or cannot read the queue; the container log names a read failure."
+
+  # A healthy scrape with a fresh queue summary never fires.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="smtp-relay", instance="relay:9154"}'
+        values: '1x10'
+      - series: 'smtp_relay_queue_scrape_ok{job="smtp-relay", instance="relay:9154"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: SmtpRelayDown
+        exp_alerts: []
+
+  # The page still answers, but the queue reader has stopped: its summary goes
+  # stale and scrape_ok drops to 0 at 1m while up stays 1. The queue series are
+  # gone, so SmtpRelayMailStuck cannot see the queue, and SmtpRelayDown fires
+  # once scrape_ok 0 has held for 5m.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="smtp-relay", instance="relay:9154"}'
+        values: '1x10'
+      - series: 'smtp_relay_queue_scrape_ok{job="smtp-relay", instance="relay:9154"}'
+        values: '1 0x10'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: SmtpRelayDown
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: SmtpRelayDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: smtp-relay
+              instance: relay:9154
+            exp_annotations:
+              summary: "docker-smtp-relay is down or cannot read its queue"
+              description: "For 5m the METRICS_PORT scrape failed or reported smtp_relay_queue_scrape_ok 0. A failed scrape means the container, Postfix or network path is down; scrape_ok 0 means the reader stopped or cannot read the queue; the container log names a read failure."
+      - eval_time: 6m
+        alertname: SmtpRelayMailStuck
+        exp_alerts: []
+
+  # The oldest deferred message ages one minute per minute from 25m: it passes
+  # 1800s at 6m and the alert fires once that has held for 5m.
+  - interval: 1m
+    input_series:
+      - series: 'smtp_relay_queue_oldest_message_age_seconds{job="smtp-relay", instance="relay:9154", queue="deferred"}'
+        values: '1500+60x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: SmtpRelayMailStuck
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: SmtpRelayMailStuck
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: smtp-relay
+              instance: relay:9154
+              queue: deferred
+            exp_annotations:
+              summary: "Mail has waited over 30 minutes in the smtp-relay queue"
+              description: "The oldest deferred message arrived 2160s ago. Postfix keeps retrying for up to five days. The deferred lines in the container log carry your provider's reply; check the login, the TLS level and the provider's status."
+
+  # Mail that drains below the threshold resolves the alert; an empty deferred
+  # queue reads 0.
+  - interval: 1m
+    input_series:
+      - series: 'smtp_relay_queue_oldest_message_age_seconds{job="smtp-relay", instance="relay:9154", queue="deferred"}'
+        values: '2000x8 0x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: SmtpRelayMailStuck
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: smtp-relay
+              instance: relay:9154
+              queue: deferred
+            exp_annotations:
+              summary: "Mail has waited over 30 minutes in the smtp-relay queue"
+              description: "The oldest deferred message arrived 2000s ago. Postfix keeps retrying for up to five days. The deferred lines in the container log carry your provider's reply; check the login, the TLS level and the provider's status."
+      - eval_time: 12m
+        alertname: SmtpRelayMailStuck
+        exp_alerts: []

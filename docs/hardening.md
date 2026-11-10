@@ -6,6 +6,8 @@ This page is for readers who run docker-smtp-relay on a shared or internet-facin
 
 The example compose file publishes `25:25`, which opens the SMTP listener on every host interface. `ACCEPTED_NETWORKS` is relay permission. It decides who may send mail through the relay, not who can connect, so it does not stop internet scanners from connecting and exercising Postfix's SMTP parser. On a host with an internet-facing interface, publish the port on a LAN address only, for example `ports: ["192.0.2.10:25:25"]`, or firewall TCP port 25 to your own networks, or both.
 
+The metrics port, when `METRICS_PORT` is set, has no login and shows queue sizes and ages, not message content or addresses. Publish it on a LAN address only, such as `"192.0.2.10:9154:9154"`, where your Prometheus reaches it.
+
 Senders never log in to the relay. It accepts mail only by the sender's network address, so every host inside `ACCEPTED_NETWORKS` can send through your provider account.
 
 ## Checks before Postfix starts
@@ -40,6 +42,8 @@ The container runs as root, because Postfix's master process needs root to liste
     security_opt:
       - "no-new-privileges:true"
 ```
+
+This option stops `postqueue` from gaining the `postdrop` group through its setgid bit, and `METRICS_PORT` needs that group to read the queue. With `METRICS_PORT` set, the relay therefore starts its queue reader as the unprivileged `smtp-metrics` user with `postdrop` as an extra group. A group a process holds from its start survives no-new-privileges, so this works on any spool filesystem. The reader opens no port. The page on `METRICS_PORT` runs as `smtp-metrics` without `postdrop`, because that group can also put mail straight into the queue, past the checks port 25 applies. The page only reads the summary the reader writes.
 
 ## Accepted scanner findings
 

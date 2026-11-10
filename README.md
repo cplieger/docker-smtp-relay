@@ -90,6 +90,7 @@ Every setting is an environment variable, checked each time the container starts
 | `SMTPD_TLS_CERT_FILE` | Certificate file in PEM form, to offer STARTTLS to your apps on port 25. Set it with `SMTPD_TLS_KEY_FILE` | _(unset)_ |
 | `SMTPD_TLS_KEY_FILE` | Private key file in PEM form for that certificate | _(unset)_ |
 | `STARTUP_PROBE` | `true` checks at start that your provider's server answers on its port, and logs the result | `true` |
+| `METRICS_PORT` | Port, 1 to 65535 and not 25, for a Prometheus metrics page about the mail queue. Unset serves no page | _(unset)_ |
 
 The image logs in UTC, and `TZ` has no effect. [Configuration](docs/configuration.md) lists every other setting and covers the TLS levels, inbound TLS, recipient filtering and provider examples.
 
@@ -100,18 +101,19 @@ The image logs in UTC, and `TZ` has no effect. [Configuration](docs/configuratio
 | Port | Description |
 | --- | --- |
 | `25` | SMTP, where your apps send mail |
+| `METRICS_PORT`, when set | Prometheus metrics at `/metrics`, with no login. Publish it only to the network your Prometheus uses |
 
 ## Security
 
-Keep port 25 on your own network. The example publishes it on every host interface, and `ACCEPTED_NETWORKS` decides who may send mail, not who can connect. On a host with an internet-facing interface, publish it on a LAN address only, such as `"192.0.2.10:25:25"`, or firewall port 25.
+Keep port 25 on your own network. The example publishes it on every host interface, and `ACCEPTED_NETWORKS` decides who may send mail, not who can connect. On a host with an internet-facing interface, publish it on a LAN address only, such as `"192.0.2.10:25:25"`, or firewall port 25. The metrics port has no login, so publish it the same way.
 
-Your apps send to the relay without encryption unless you set `SMTPD_TLS_CERT_FILE` and `SMTPD_TLS_KEY_FILE`. When the relay uses TLS to your provider, it uses TLS 1.2 or later. With a login set, the TLS levels `none` and `may` are refused.
+Your apps send to the relay without encryption unless you set `SMTPD_TLS_CERT_FILE` and `SMTPD_TLS_KEY_FILE`. With a login set, the TLS levels `none` and `may` are refused.
 
 The relay keeps the provider login in a file only root can read. Settings are environment variables only, so anyone who can run `docker inspect` on the host can read the password. The container starts as root to listen on port 25, and Postfix runs its workers as an unprivileged user. [Security](docs/hardening.md) covers hardening, every check the relay runs and what the image contains.
 
 ## Troubleshooting
 
-Every 30 seconds, the healthcheck checks that Postfix answers on port 25 with its `220` greeting. Unhealthy means Postfix is not answering. The check never contacts your provider, so a healthy relay can still fail to deliver mail. If Postfix stops, the container exits and Docker's restart policy starts it again. Queued mail stays on the spool volume and is retried.
+Every 30 seconds, the healthcheck checks that Postfix answers on port 25 with its `220` greeting. Unhealthy means Postfix is not answering. The check never contacts your provider, so a healthy relay can still fail to deliver mail. If Postfix stops, the container exits and Docker's restart policy starts it again. Queued mail stays on the spool volume and is retried. An unhealthy container notifies nobody. [Knowing the app is alive](docs/monitoring.md#knowing-the-app-is-alive) says what does.
 
 - The container exits at start. The `level=error` line names the setting to fix.
 - The log shows `upstream relay unreachable at startup`. `RELAY_HOST` or `RELAY_PORT` is wrong, or a firewall blocks the connection.
@@ -120,13 +122,13 @@ Every 30 seconds, the healthcheck checks that Postfix answers on port 25 with it
 
 ## Monitoring
 
-The relay has no metrics endpoint. Postfix logs every delivery attempt to the container log with `status=sent`, `status=deferred` or `status=bounced`, and the startup lines are `level=... msg=...` pairs. [Monitoring and alerts](docs/monitoring.md) explains the lines and has a Loki alert rule for failing delivery.
+docker-smtp-relay can serve Prometheus metrics about its mail queue when `METRICS_PORT` is set, and Postfix logs every delivery attempt. Alert rules for Prometheus and for Loki ship in [`alerts/`](alerts/). [Monitoring and alerts](docs/monitoring.md) says which to load and why alerts about the relay should not travel by email. The image has a Docker healthcheck, and [Knowing the app is alive](docs/monitoring.md#knowing-the-app-is-alive) says what it proves and who is told.
 
 ## Documentation
 
 - [Configuration](docs/configuration.md) lists every setting, with the TLS levels, inbound TLS and recipient filtering.
 - [Security](docs/hardening.md) covers network exposure, the hardened compose settings and what the image contains.
-- [Monitoring and alerts](docs/monitoring.md) explains the log lines and the alert rule.
+- [Monitoring and alerts](docs/monitoring.md) explains the metrics, the log lines, both rule files and who tells you the relay stopped.
 - [How docker-smtp-relay works](docs/how-it-works.md) describes the design and what happens at each start.
 
 ## Credits

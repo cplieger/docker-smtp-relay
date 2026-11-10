@@ -1,0 +1,45 @@
+# Alert rules for docker-smtp-relay as Loki ruler (LogQL) groups. They read the
+# delivery lines Postfix writes to the container log. The smtp-relay-state group
+# is the alternative to alerts/promql.yaml: load it only if you do not load that
+# file, or SmtpRelayMailStuck fires twice. The smtp-relay-events group is
+# complementary: always load it, because a bounce has no metric. SmtpRelayDown
+# exists only in alerts/promql.yaml; with logs only, an outside probe of port 25
+# covers a dead relay. Change the `container` selector to the label your log
+# collector sets. Thresholds, windows and severity labels are starting points.
+# Notes are in docs/monitoring.md.
+groups:
+  - name: smtp-relay-state
+    rules:
+      # `delay=` is the time since the message arrived, logged on every
+      # attempt. The window must be longer than the longest gap between two
+      # attempts: maximal_backoff_time (4000s by default) plus queue_run_delay
+      # (300s) plus one attempt's timeouts, such as smtp_helo_timeout (300s).
+      # The alert keeps firing for up to the window after the last deferral.
+      - alert: SmtpRelayMailStuck
+        expr: |
+          max_over_time({container="smtp-relay"} |= ", status=deferred " | regexp ", delay=(?P<delay>[0-9.]+)," | unwrap delay | __error__="" [90m]) by (container) > 1800
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Mail has waited over 30 minutes in the smtp-relay queue"
+          description: >
+            A delivery attempt was deferred for a message that arrived over
+            30 minutes ago. Postfix keeps retrying for up to five days. The
+            deferred lines carry your provider's reply; check the login, the
+            TLS level and the provider's status.
+  - name: smtp-relay-events
+    rules:
+      - alert: SmtpRelayMailBounced
+        expr: |
+          sum by (container) (count_over_time({container="smtp-relay"} |= ", status=bounced " [15m])) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "smtp-relay could not deliver a message"
+          description: >
+            Your provider refused a message for good in the last 15 minutes,
+            so it will not be retried. The bounced line names the recipient
+            and the provider's reply. A sender without a mailbox gets no
+            notice.
