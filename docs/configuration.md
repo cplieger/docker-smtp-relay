@@ -11,13 +11,13 @@ Every setting is an environment variable in the compose file. The container read
 | Variable | Description | Default |
 | --- | --- | --- |
 | `RELAY_HOST` | Your provider's SMTP server, such as `email-smtp.us-east-1.amazonaws.com`, `smtp.gmail.com` or `smtp.mailgun.org` | required |
-| `RELAY_LOGIN` | SMTP username. Set it together with `RELAY_PASSWORD`, or leave both unset, and delete both lines from the compose file, for a server that needs no login | _(unset)_ |
+| `RELAY_LOGIN` | SMTP username, set together with `RELAY_PASSWORD`. For a server that needs no login, delete both lines from the compose file | _(unset)_ |
 | `RELAY_PASSWORD` | SMTP password. Spaces inside it are kept, so a Gmail App Password works as issued. It must not end with whitespace | _(unset)_ |
-| `RELAY_PORT` | `587` for STARTTLS, `465` for implicit TLS. With `465`, `SMTP_TLS_SECURITY_LEVEL` cannot be `none`, `may` or `dane` | `587` |
+| `RELAY_PORT` | `587` for STARTTLS, `465` for implicit TLS, which email settings often call SSL. With `465`, the relay refuses the `SMTP_TLS_SECURITY_LEVEL` values `none`, `may` and `dane` | `587` |
 | `SMTP_TLS_SECURITY_LEVEL` | How the relay checks your provider's certificate. `secure` checks the chain and the host name | `secure` |
 | `SMTP_TLS_FINGERPRINT_CERT_MATCH` | Space-separated certificate or public-key digests of your provider's server, as colon-separated hex pairs. Required at level `fingerprint`, refused at any other | _(unset)_ |
 | `SMTP_TLS_FINGERPRINT_DIGEST` | Digest used at level `fingerprint`, `sha256` or `sha512`. Setting it at any other level is refused, and an empty value counts as unset | `sha256` |
-| `ACCEPTED_NETWORKS` | Space-separated networks, in CIDR form, allowed to send through the relay. `0.0.0.0/0`, `::/0` and ranges wider than /8 are refused | `192.168.0.0/16 172.16.0.0/12 10.0.0.0/8` |
+| `ACCEPTED_NETWORKS` | Space-separated IPv4 or IPv6 networks, in CIDR form, allowed to send through the relay. The relay refuses `0.0.0.0/0`, `::/0` and any prefix shorter than /8 | `192.168.0.0/16 172.16.0.0/12 10.0.0.0/8` |
 | `RECIPIENT_RESTRICTIONS` | Space-separated addresses, domains or patterns the relay may send to. Empty sends to anyone | _(unset)_ |
 | `MESSAGE_SIZE_LIMIT` | Largest message accepted, in bytes, from 1 to 104857600 | `10240000` |
 | `SMTP_HOSTNAME` | The name the relay gives when it connects to your provider. Use a full domain name, because some servers refuse a short one | `smtp-relay.local` |
