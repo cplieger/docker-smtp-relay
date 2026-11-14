@@ -17,9 +17,9 @@ docker-smtp-relay lets every app on your network send email through one provider
 
 ## Who it is for
 
-docker-smtp-relay is built for a home lab where a NAS, Grafana, Paperless-ngx, Uptime Kuma or IoT devices send alerts by email. Devices that cannot use your provider's login or TLS can still send.
+docker-smtp-relay is built for a home lab where a NAS, Grafana, Paperless-ngx, Uptime Kuma or IoT devices send alerts by email. Devices that cannot log in or use TLS can still send through the relay.
 
-You need an email provider account that accepts SMTP, with its server name, port and login. For Gmail, the login is an App Password. Keep port 25 on your own network.
+You need an email provider account that accepts SMTP, with its server name, port and login. For Gmail, the login is an App Password. Keep port 25 off the internet.
 
 Other projects suit other needs:
 
@@ -66,9 +66,10 @@ services:
    ```
 
    Run `chmod 600 .env` so only you can read it. Compose refuses to start while either value is missing.
-4. Set `ACCEPTED_NETWORKS` to the networks your apps send from. For apps in other containers, add their Docker network's range, which `docker network inspect <network>` shows.
+4. Set `ACCEPTED_NETWORKS` to the networks your apps send from. For apps in other containers, add their Docker network's range, which `docker network inspect <network>` shows as `Subnet`.
 5. Run `docker compose up -d`.
 6. In each app's email settings, enter your Docker host's address as the SMTP server, port 25, with no login and no encryption.
+7. In the same settings, set the sender address to one your provider lets your account send from. The relay passes it through unchanged.
 
 Run `docker logs smtp-relay`. You should see `msg="starting smtp-relay"`. If you see `upstream relay unreachable at startup`, check `RELAY_HOST`, `RELAY_PORT` and your firewall. Mail queues until the relay reaches your provider.
 
@@ -79,11 +80,11 @@ Every setting is an environment variable, checked each time the container starts
 | Variable | Description | Default |
 | --- | --- | --- |
 | `RELAY_HOST` | Your provider's SMTP server, such as `email-smtp.us-east-1.amazonaws.com`, `smtp.gmail.com` or `smtp.mailgun.org` | required |
-| `RELAY_LOGIN` | SMTP username. Set it together with `RELAY_PASSWORD`, or leave both unset, and delete both lines from the compose file, for a server that needs no login | _(unset)_ |
+| `RELAY_LOGIN` | SMTP username, set together with `RELAY_PASSWORD`. For a server that needs no login, delete both lines from the compose file | _(unset)_ |
 | `RELAY_PASSWORD` | SMTP password. Spaces inside it are kept, so a Gmail App Password works as issued. It must not end with whitespace | _(unset)_ |
-| `RELAY_PORT` | `587` for STARTTLS, `465` for implicit TLS. With `465`, `SMTP_TLS_SECURITY_LEVEL` cannot be `none`, `may` or `dane` | `587` |
+| `RELAY_PORT` | `587` for STARTTLS, `465` for implicit TLS, which email settings often call SSL. With `465`, the relay refuses the `SMTP_TLS_SECURITY_LEVEL` values `none`, `may` and `dane` | `587` |
 | `SMTP_TLS_SECURITY_LEVEL` | How the relay checks your provider's certificate. `secure` checks the chain and the host name | `secure` |
-| `ACCEPTED_NETWORKS` | Space-separated networks, in CIDR form, allowed to send through the relay. `0.0.0.0/0`, `::/0` and ranges wider than /8 are refused | `192.168.0.0/16 172.16.0.0/12 10.0.0.0/8` |
+| `ACCEPTED_NETWORKS` | Space-separated IPv4 or IPv6 networks, in CIDR form, allowed to send through the relay. The relay refuses `0.0.0.0/0`, `::/0` and any prefix shorter than /8 | `192.168.0.0/16 172.16.0.0/12 10.0.0.0/8` |
 | `RECIPIENT_RESTRICTIONS` | Space-separated addresses, domains or patterns the relay may send to. Empty sends to anyone | _(unset)_ |
 | `MESSAGE_SIZE_LIMIT` | Largest message accepted, in bytes, from 1 to 104857600 | `10240000` |
 | `SMTP_HOSTNAME` | The name the relay gives when it connects to your provider. Use a full domain name, because some servers refuse a short one | `smtp-relay.local` |
@@ -105,20 +106,20 @@ The image logs in UTC, and `TZ` has no effect. [Configuration](docs/configuratio
 
 ## Security
 
-Keep port 25 on your own network. The example publishes it on every host interface, and `ACCEPTED_NETWORKS` decides who may send mail, not who can connect. On a host with an internet-facing interface, publish it on a LAN address only, such as `"192.0.2.10:25:25"`, or firewall port 25. The metrics port has no login, so publish it the same way.
+The example publishes port 25 on every host interface. Anyone who reaches the port can connect. Only addresses in `ACCEPTED_NETWORKS` can send mail. On a host with an internet-facing interface, publish it on a LAN address only, such as `"192.0.2.10:25:25"`, or firewall port 25. The metrics port has no login, so publish it the same way.
 
-Your apps send to the relay without encryption unless you set `SMTPD_TLS_CERT_FILE` and `SMTPD_TLS_KEY_FILE`. With a login set, the TLS levels `none` and `may` are refused.
+Your apps send to the relay without encryption unless you set `SMTPD_TLS_CERT_FILE` and `SMTPD_TLS_KEY_FILE`. With a login set, the relay refuses the TLS levels `none` and `may` for the connection to your provider.
 
-The relay keeps the provider login in a file only root can read. Settings are environment variables only, so anyone who can run `docker inspect` on the host can read the password. The container starts as root to listen on port 25, and Postfix runs its workers as an unprivileged user. [Security](docs/hardening.md) covers hardening, every check the relay runs and what the image contains.
+The relay copies the provider login into a file only root can read. Settings come from environment variables only, so `docker inspect` still shows the password. The container starts as root to listen on port 25, and Postfix runs its workers as an unprivileged user. [Security](docs/hardening.md) covers hardening, every check the relay runs and what the image contains.
 
 ## Troubleshooting
 
-Every 30 seconds, the healthcheck checks that Postfix answers on port 25 with its `220` greeting. Unhealthy means Postfix is not answering. The check never contacts your provider, so a healthy relay can still fail to deliver mail. If Postfix stops, the container exits and Docker's restart policy starts it again. Queued mail stays on the spool volume and is retried. An unhealthy container notifies nobody. [Knowing the app is alive](docs/monitoring.md#knowing-the-app-is-alive) says what does.
+Every 30 seconds, the healthcheck checks that Postfix answers on port 25 with its `220` greeting. Unhealthy means Postfix is not answering. The check never contacts your provider, so a healthy relay can still fail to deliver mail. If Postfix stops, the container exits and Docker's restart policy starts it again. Queued mail stays on the spool volume and is retried. When the container turns unhealthy, Docker alerts no one. [Knowing the app is alive](docs/monitoring.md#knowing-the-app-is-alive) lists what can alert you.
 
 - The container exits at start. The `level=error` line names the setting to fix.
 - The log shows `upstream relay unreachable at startup`. `RELAY_HOST` or `RELAY_PORT` is wrong, or a firewall blocks the connection.
 - An app reports `Access denied` when it sends. Its address is outside `ACCEPTED_NETWORKS`.
-- Delivery lines show `status=deferred`. Your provider could not be reached, or it refused the login or the TLS check. The line carries the reason.
+- Delivery lines show `status=deferred`. Your provider could not be reached, or it refused the login or the TLS check. The line carries the reason, and Postfix retries the message for up to 5 days.
 
 ## Monitoring
 

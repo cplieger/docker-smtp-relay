@@ -46,7 +46,7 @@ The startup check, `STARTUP_PROBE`, opens a plain TCP connection to `RELAY_HOST`
 Postfix then logs every delivery attempt with a `status=` field:
 
 - `status=sent` means your provider accepted the message.
-- `status=deferred` means delivery failed for now. The message stays in the queue and Postfix retries it. The line's `delay=` field is the number of seconds since the message arrived, which the log rule `SmtpRelayMailStuck` reads.
+- `status=deferred` means delivery failed for now. The message stays in the queue and Postfix retries it. The line's `delay=` field is the number of seconds since the message arrived, which the log rule `SmtpRelayMailStuck` reads. Postfix stops retrying a message after 5 days in the queue, its default lifetime. It then logs `status=expired, returned to sender` and tries to return the message to its sender.
 - `status=bounced` means your provider refused the message for good, which `SmtpRelayMailBounced` reads.
 
 These fields are Postfix's own wording. The image's tests send mail through the Postfix version the image ships and check that each field appears as the rules expect.
