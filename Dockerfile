@@ -3,7 +3,7 @@
 # versioning=semver keeps Renovate off this repo's ancient non-semver v20010228*
 # tags, which semver-coerced ordering would otherwise rank highest.
 # renovate: datasource=github-tags depName=vdukhovni/postfix versioning=semver
-ARG POSTFIX_VERSION=v3.11.7
+ARG POSTFIX_VERSION=v3.11.8
 # github-tags exposes the git sha, not the tarball hash, so the repin task
 # recomputes this from the marker URL below on a version bump.
 # repin: dep=vdukhovni/postfix url=https://high5.nl/mirrors/postfix-release/official/postfix-{version_nov}.tar.gz
